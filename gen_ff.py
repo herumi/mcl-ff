@@ -1,13 +1,20 @@
 from s_xbyak_llvm import *
+from mont import *
 import argparse
 
 unit = 0
 unit2 = 0
+MASK = 0
+mont = None
 
-def setGlobalParam(u):
-  global unit, unit2
-  unit = u
-  unit2 = u * 2
+def setGlobalParam(opt):
+  global unit, unit2, MASK
+  unit = opt.u
+  unit2 = unit * 2
+  MASK = (1 << unit) - 1
+
+  global mont
+  mont = Montgomery(opt.p, unit)
 
 def gen_add(N):
   bit = unit * N
@@ -111,18 +118,23 @@ def main():
   parser = argparse.ArgumentParser(description='gen bint')
   parser.add_argument('-u', type=int, default=64, help='unit')
   parser.add_argument('-n', type=int, default=0, help='max size of unit')
+  parser.add_argument('-p', type=int, default=0, help='characteristic of a finite field')
   parser.add_argument('-proto', action='store_true', default=False, help='show prototype')
   parser.add_argument('-addn', type=int, default=0, help='mad size of add/sub')
   opt = parser.parse_args()
   if opt.n == 0:
     opt.n = 9 if opt.u == 64 else 17
     opt.addn = 16 if opt.u == 64 else 32
+  if opt.p == 0:
+    # BLS12-381
+    opt.p = 0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab
 
-  setGlobalParam(opt.u)
+  setGlobalParam(opt)
   if opt.proto:
     showPrototype()
 
   a = makeVar('x', 32, [1, 2, 3, 4], const=True, static=True)
+  b = makeVar('p', mont.bit, mont.p, const=True, static=True)
   makeVar('y', 32, 4, static=True)
   fff(a)
   term()

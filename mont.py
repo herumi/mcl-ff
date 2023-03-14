@@ -5,10 +5,13 @@ class Montgomery:
   """
   def __init__(self, p, L):
     self.p = p
+    self.pbit = p.bit_length()
     self.L = L
     self.mask = (1<<L) - 1
     self.ip = self.getCoeff()
-    self.pn = (len(bin(p)) - 2 + L - 1) // L
+    self.pn = (self.pbit + L - 1) // L
+    self.bit = self.pn * self.L
+    self.isFullBit = self.pbit == self.bit
     self.M = 2**L
     self.iM = (self.p * self.ip + 1) // self.M
     self.Z = pow(self.M, self.pn, self.p)
@@ -21,6 +24,9 @@ class Montgomery:
   def put(self):
     print(f'pn={self.pn}')
     print(f'p ={hex(self.p)}')
+    print(f'pbit={self.pbit}')
+    print(f'bit ={self.bit}')
+    print(f'isFullBit={self.isFullBit}')
     print(f'ip={hex(self.ip)}')
     print(f'M ={hex(self.M)}')
     print(f'iM={hex(self.iM)}')

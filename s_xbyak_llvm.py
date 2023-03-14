@@ -178,6 +178,7 @@ class Operand:
         return f'[{len(self.imm)} x i{self.bit}]'
     raise Exception('no type')
 
+  # get prototype declaration
   def getCtype(self):
     if self.t == INT_TYPE:
       return f'uint{self.bit}_t'
@@ -225,11 +226,16 @@ def getBitSize(v):
   return bit
 
 class Imm(Operand):
-  def __init__(self, imm):
-    bit = getBitSize(imm)
+  def __init__(self, imm, bit=0):
+    if bit == 0:
+      bit = getBitSize(imm)
     self = Operand.__init__(self, IMM_TYPE, bit, imm)
 
 class Var(Operand):
+  """
+    bit : 32 or 64
+    imm : a value or an array of values
+  """
   def __init__(self, name, bit, imm):
     self = Operand.__init__(self, VAR_TYPE, bit, imm, name=name)
 
