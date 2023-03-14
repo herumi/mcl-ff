@@ -130,16 +130,18 @@ def main():
   parser = argparse.ArgumentParser(description='gen bint')
   parser.add_argument('-u', type=int, default=64, help='unit')
   parser.add_argument('-n', type=int, default=0, help='max size of unit')
-  parser.add_argument('-p', type=int, default=0, help='characteristic of a finite field')
+  parser.add_argument('-p', type=str, default='', help='characteristic of a finite field')
   parser.add_argument('-proto', action='store_true', default=False, help='show prototype')
+  parser.add_argument('-pre', type=str, default='mclb_fp_', help='prefix of a function name')
   parser.add_argument('-addn', type=int, default=0, help='mad size of add/sub')
   opt = parser.parse_args()
   if opt.n == 0:
     opt.n = 9 if opt.u == 64 else 17
     opt.addn = 16 if opt.u == 64 else 32
-  if opt.p == 0:
+  if opt.p == '':
     # BLS12-381
-    opt.p = 0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab
+    opt.p = '0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab'
+  opt.p = eval(opt.p)
 
   setGlobalParam(opt)
   if opt.proto:
@@ -147,9 +149,9 @@ def main():
 
   pp = makeVar('p', mont.bit, mont.p, const=True, static=True)
   ip = makeVar('ip', unit, mont.ip, const=True, static=True)
-  name = 'mclb_fp_add'
+  name = f'{opt.pre}add'
   gen_fp_add(name, mont.pn, pp)
-  name = 'mclb_fp_sub'
+  name = f'{opt.pre}sub'
   gen_fp_sub(name, mont.pn, pp)
 
   term()
