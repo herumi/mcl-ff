@@ -50,10 +50,11 @@ def gen_extractHigh():
   z = Int(unit)
   x = Int(unit2)
   name = f'extractHigh{unit}'
-  with Function(name, z, x, private=True):
+  with Function(name, z, x, private=True) as f:
     x = lshr(x, unit)
     z = trunc(x, unit)
     ret(z)
+  return f
 
 def gen_mulPos(mulUU):
   resetGlobalIdx()
@@ -62,10 +63,11 @@ def gen_mulPos(mulUU):
   y = Int(unit)
   i = Int(unit)
   name = f'mulPos{unit}x{unit}'
-  with Function(name, xy, px, y, i, private=True):
+  with Function(name, xy, px, y, i, private=True) as f:
     x = load(getelementptr(px, i))
     xy = call(mulUU, x, y)
     ret(xy)
+  return f
 
 def gen_once():
   mulUU = gen_mulUU()
@@ -126,6 +128,42 @@ def gen_fp_sub(name, N, pp):
     storeN(v, pz)
     ret(Void)
 
+# return [xs[n-1]:xs[n-2]:...:xs[0]]
+def pack(xs):
+  x = xs[0]
+  for y in xs[1:]:
+    shift = x.bit
+    size = x.bit + y.bit
+    x = zext(x, size)
+    y = zext(y, size)
+    y = shl(y, shift)
+    x = or_(x, y)
+  return x
+
+def gen_mulUnit(name, N, mulPos, extractHigh):
+  bit = unit * N
+  bu = bit + unit
+  resetGlobalIdx()
+  z = Int(bu)
+  px = IntPtr(unit)
+  y = Int(unit)
+  with Function(name, z, px, y) as f:
+    L = []
+    H = []
+    for i in range(N):
+      xy = call(mulPos, px, y, Imm(i, unit))
+      L.append(trunc(xy, unit))
+      H.append(call(extractHigh, xy))
+
+    LL = pack(L)
+    HH = pack(H)
+    LL = zext(LL, bu)
+    HH = zext(HH, bu)
+    HH = shl(HH, unit)
+    z = add(LL, HH)
+    ret(z)
+  return f
+
 def main():
   parser = argparse.ArgumentParser(description='gen bint')
   parser.add_argument('-u', type=int, default=64, help='unit')
@@ -153,6 +191,12 @@ def main():
   gen_fp_add(name, mont.pn, pp)
   name = f'{opt.pre}sub'
   gen_fp_sub(name, mont.pn, pp)
+
+  mulUU = gen_mulUU()
+  extractHigh = gen_extractHigh()
+  mulPos = gen_mulPos(mulUU)
+  name = f'{opt.pre}mul'
+  gen_mulUnit(name, mont.pn, mulPos, extractHigh)
 
   term()
 
