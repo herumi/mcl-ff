@@ -72,25 +72,20 @@ def gen_once():
   gen_extractHigh()
   gen_mulPos(mulUU)
 
-def gen_mcl_fp_add(N, isFullBit=True):
+def gen_fp_add(name, N, pp):
   bit = unit * N
   resetGlobalIdx();
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
-  pp = IntPtr(unit)
-  name = 'mcl_fp_add'
-  if not isFullBit:
-    name += 'NF'
-  name += f'{N}L'
-  with Function(name, Void, pz, px, py, pp):
+  with Function(name, Void, pz, px, py):
     x = loadN(px, N)
     y = loadN(py, N)
-    if isFullBit:
+    if mont.isFullBit:
       x = zext(x, bit + unit)
       y = zext(y, bit + unit)
       x = add(x, y)
-      p = loadN(pp, N)
+      p = load(pp)
       p = zext(p, bit + unit)
       y = sub(x, p)
       c = trunc(lshr(y, bit), 1)
@@ -99,7 +94,7 @@ def gen_mcl_fp_add(N, isFullBit=True):
       storeN(x, pz)
     else:
       x = add(x, y)
-      p = loadN(pp, N)
+      p = load(pp)
       y = sub(x, p)
       c = trunc(lshr(y, bit - 1), 1)
       x = select(c, x, y)
@@ -133,14 +128,11 @@ def main():
   if opt.proto:
     showPrototype()
 
-  a = makeVar('x', 32, [1, 2, 3, 4], const=True, static=True)
-  b = makeVar('p', mont.bit, mont.p, const=True, static=True)
-  makeVar('y', 32, 4, static=True)
-  fff(a)
-  term()
-  return
-  gen_once()
-  gen_mcl_fp_add(3, isFullBit=False)
+  pp = makeVar('p', mont.bit, mont.p, const=True, static=True)
+  ip = makeVar('ip', unit, mont.ip, const=True, static=True)
+  name = 'mclb_fp_add'
+  gen_fp_add(name, mont.pn, pp)
+
   term()
 
 if __name__ == '__main__':
