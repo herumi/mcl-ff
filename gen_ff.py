@@ -195,7 +195,7 @@ def main():
   mulUU = gen_mulUU()
   extractHigh = gen_extractHigh()
   mulPos = gen_mulPos(mulUU)
-  name = f'{opt.pre}mul'
+  name = f'{opt.pre}mulUnit'
   gen_mulUnit(name, mont.pn, mulPos, extractHigh)
 
   term()
