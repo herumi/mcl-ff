@@ -2,7 +2,7 @@ VOID_TYPE = 0
 INT_TYPE = 1
 IMM_TYPE = 2
 INT_PTR_TYPE = 3
-ARRAY_TYPE = 4
+VAR_TYPE = 4
 
 eq = 1
 neq = 2
@@ -150,12 +150,11 @@ def resetGlobalIdx():
   g_globalIdx = 0
 
 class Operand:
-  def __init__(self, t, bit, imm=0):
+  def __init__(self, t, bit, imm=0, name=None):
     self.t = t
     self.bit = bit
     self.imm = imm
-    if type(imm) == list:
-      self.t = ARRAY_TYPE
+    self.name = name
     if t in [INT_TYPE, INT_PTR_TYPE]:
       self.idx = getGlobalIdx()
 
@@ -172,8 +171,11 @@ class Operand:
         return f'i{self.bit}*'
     if self.t == VOID_TYPE:
       return 'void'
-    if self.t == ARRAY_TYPE:
-      return f'[{len(self.imm)} x i{self.bit}]'
+    if self.t == VAR_TYPE:
+      if type(self.imm) == int:
+        return f'i{self.bit}'
+      else:
+        return f'[{len(self.imm)} x i{self.bit}]'
     raise Exception('no type')
 
   def getCtype(self):
@@ -190,15 +192,22 @@ class Operand:
       return f'%r{self.idx}'
     if self.t == IMM_TYPE:
       return str(self.imm)
-    if self.t == ARRAY_TYPE:
-      s = '['
-      for i in range(len(self.imm)):
-        if i > 0:
-          s += ', '
-        s += f'i{self.bit} {self.imm[i]}'
-      s += ']'
-      return s
+    if self.t == VAR_TYPE:
+      return f'*@{self.name}'
     return ''
+
+  def getValStr(self):
+    if self.t != VAR_TYPE:
+      raise Exception('bad type', self.t)
+    if type(self.imm) == int:
+      return str(self.imm)
+    s = '['
+    for i in range(len(self.imm)):
+      if i > 0:
+        s += ', '
+      s += f'i{self.bit} {self.imm[i]}'
+    s += ']'
+    return s
 
 class Int(Operand):
   def __init__(self, bit):
@@ -216,14 +225,13 @@ def getBitSize(v):
   return bit
 
 class Imm(Operand):
-  def __init__(self, imm, bit=0):
-    if bit == 0:
-      if type(imm) == list:
-        v = imm[0]
-      else:
-        v = imm
-      bit = getBitSize(v)
+  def __init__(self, imm):
+    bit = getBitSize(imm)
     self = Operand.__init__(self, IMM_TYPE, bit, imm)
+
+class Var(Operand):
+  def __init__(self, name, bit, imm):
+    self = Operand.__init__(self, VAR_TYPE, bit, imm, name=name)
 
 Void = Operand(VOID_TYPE, 0)
 
@@ -318,7 +326,7 @@ static variable if static=True
 const variable if const=True
 """
 def setVar(name, bit, v, static=False, const=False):
-  r = Imm(v, bit=bit)
+  r = Var(name, bit, v)
   if static:
     attr = 'internal unnamed_addr'
   else:
@@ -327,7 +335,7 @@ def setVar(name, bit, v, static=False, const=False):
     attr += ' constant'
   else:
     attr += ' global'
-  output(f'@{name} = {attr} {r.getFullName()}, align 4')
+  output(f'@{name} = {attr} {r.getType()} {r.getValStr()}, align 4')
   return r
 ####
 

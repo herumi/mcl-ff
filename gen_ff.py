@@ -99,6 +99,13 @@ def gen_mcl_fp_add(N, isFullBit=True):
       storeN(x, pz)
     ret(Void)
 
+def fff(y):
+  resetGlobalIdx();
+  x = Int(32)
+  with Function('sss', x, x):
+    x = load(y)
+    ret(x)
+
 def main():
   parser = argparse.ArgumentParser(description='gen bint')
   parser.add_argument('-u', type=int, default=64, help='unit')
@@ -115,8 +122,10 @@ def main():
     showPrototype()
 
   setVar('x', 32, [1, 2, 3, 4], const=True, static=True)
-  setVar('y', 32, 4, static=True)
-  setVar('z', 32, 9, const=True)
+  y = setVar('y', 32, 4, static=True)
+  fff(y)
+  term()
+  return
   gen_once()
   gen_mcl_fp_add(3, isFullBit=False)
   term()
