@@ -101,13 +101,30 @@ def gen_fp_add(name, N, pp):
       storeN(x, pz)
     ret(Void)
 
-def fff(a):
+def gen_fp_sub(name, N, pp):
+  bit = unit * N
   resetGlobalIdx();
-  x = Int(32)
-  with Function('sss', x, x):
-    p = getelementptr(a, x)
-    x = load(p)
-    ret(x)
+  pz = IntPtr(unit)
+  px = IntPtr(unit)
+  py = IntPtr(unit)
+  with Function(name, Void, pz, px, py):
+    x = loadN(px, N)
+    y = loadN(py, N)
+    if mont.isFullBit:
+      x = zext(x, bit + 1)
+      y = zext(y, bit + 1)
+
+    v = sub(x, y)
+    if mont.isFullBit:
+      c = trunc(lshr(v, bit), 1)
+      v = trunc(v, bit)
+    else:
+      c = trunc(lshr(v, bit-1), 1)
+    p = load(pp)
+    c = select(c, p, Imm(0, bit))
+    v = add(v, c)
+    storeN(v, pz)
+    ret(Void)
 
 def main():
   parser = argparse.ArgumentParser(description='gen bint')
@@ -132,6 +149,8 @@ def main():
   ip = makeVar('ip', unit, mont.ip, const=True, static=True)
   name = 'mclb_fp_add'
   gen_fp_add(name, mont.pn, pp)
+  name = 'mclb_fp_sub'
+  gen_fp_sub(name, mont.pn, pp)
 
   term()
 
