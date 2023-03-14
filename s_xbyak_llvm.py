@@ -302,7 +302,10 @@ def getelementptr(x, v):
   if type(v) == int:
     v = Imm(v)
   r = IntPtr(x.bit)
-  output(f'{r.getName()} = getelementptr i{x.bit}, {x.getFullName()}, {v.getFullName()}')
+  if type(x) == Var:
+    output(f'{r.getName()} = getelementptr inbounds {x.getType()}, {x.getFullName()}, i32 0, {v.getFullName()}')
+  else:
+    output(f'{r.getName()} = getelementptr i{x.bit}, {x.getFullName()}, {v.getFullName()}')
   return r
 
 def call(func, *args):

@@ -99,11 +99,12 @@ def gen_mcl_fp_add(N, isFullBit=True):
       storeN(x, pz)
     ret(Void)
 
-def fff(y):
+def fff(a):
   resetGlobalIdx();
   x = Int(32)
   with Function('sss', x, x):
-    x = load(y)
+    p = getelementptr(a, x)
+    x = load(p)
     ret(x)
 
 def main():
@@ -121,9 +122,9 @@ def main():
   if opt.proto:
     showPrototype()
 
-  setVar('x', 32, [1, 2, 3, 4], const=True, static=True)
-  y = setVar('y', 32, 4, static=True)
-  fff(y)
+  a = setVar('x', 32, [1, 2, 3, 4], const=True, static=True)
+  setVar('y', 32, 4, static=True)
+  fff(a)
   term()
   return
   gen_once()
