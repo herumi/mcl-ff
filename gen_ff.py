@@ -114,6 +114,9 @@ def main():
   if opt.proto:
     showPrototype()
 
+  setVar('x', 32, [1, 2, 3, 4], const=True, static=True)
+  setVar('y', 32, 4, static=True)
+  setVar('z', 32, 9, const=True)
   gen_once()
   gen_mcl_fp_add(3, isFullBit=False)
   term()

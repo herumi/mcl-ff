@@ -2,6 +2,7 @@ VOID_TYPE = 0
 INT_TYPE = 1
 IMM_TYPE = 2
 INT_PTR_TYPE = 3
+ARRAY_TYPE = 4
 
 eq = 1
 neq = 2
@@ -153,7 +154,9 @@ class Operand:
     self.t = t
     self.bit = bit
     self.imm = imm
-    if t != IMM_TYPE:
+    if type(imm) == list:
+      self.t = ARRAY_TYPE
+    if t in [INT_TYPE, INT_PTR_TYPE]:
       self.idx = getGlobalIdx()
 
   def getFullName(self, noalias=False):
@@ -169,6 +172,8 @@ class Operand:
         return f'i{self.bit}*'
     if self.t == VOID_TYPE:
       return 'void'
+    if self.t == ARRAY_TYPE:
+      return f'[{len(self.imm)} x i{self.bit}]'
     raise Exception('no type')
 
   def getCtype(self):
@@ -185,6 +190,14 @@ class Operand:
       return f'%r{self.idx}'
     if self.t == IMM_TYPE:
       return str(self.imm)
+    if self.t == ARRAY_TYPE:
+      s = '['
+      for i in range(len(self.imm)):
+        if i > 0:
+          s += ', '
+        s += f'i{self.bit} {self.imm[i]}'
+      s += ']'
+      return s
     return ''
 
 class Int(Operand):
@@ -195,12 +208,21 @@ class IntPtr(Operand):
   def __init__(self, bit):
     self = Operand.__init__(self, INT_PTR_TYPE, bit)
 
+def getBitSize(v):
+  bit = int(v).bit_length()
+  bit = ((bit + 31) // 32) * 32
+  if bit == 0:
+    bit = 32
+  return bit
+
 class Imm(Operand):
-  def __init__(self, imm):
-    bit = int(imm).bit_length()
-    bit = ((bit + 31) // 32) * 32
+  def __init__(self, imm, bit=0):
     if bit == 0:
-      bit = 32
+      if type(imm) == list:
+        v = imm[0]
+      else:
+        v = imm
+      bit = getBitSize(v)
     self = Operand.__init__(self, IMM_TYPE, bit, imm)
 
 Void = Operand(VOID_TYPE, 0)
@@ -290,6 +312,23 @@ def call(func, *args):
   if func.ret.t != VOID_TYPE:
     return r
 
+"""
+uint{bit}_t name = v; v is imm or array of imm
+static variable if static=True
+const variable if const=True
+"""
+def setVar(name, bit, v, static=False, const=False):
+  r = Imm(v, bit=bit)
+  if static:
+    attr = 'internal unnamed_addr'
+  else:
+    attr = 'dso_local local_unnamed_addr'
+  if const:
+    attr += ' constant'
+  else:
+    attr += ' global'
+  output(f'@{name} = {attr} {r.getFullName()}, align 4')
+  return r
 ####
 
 def loadN(p, n, offset=0):
