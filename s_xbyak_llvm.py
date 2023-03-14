@@ -328,7 +328,7 @@ uint{bit}_t name = v; v is imm or array of imm
 static variable if static=True
 const variable if const=True
 """
-def setVar(name, bit, v, static=False, const=False):
+def makeVar(name, bit, v, static=False, const=False):
   r = Var(name, bit, v)
   if static:
     attr = 'internal unnamed_addr'

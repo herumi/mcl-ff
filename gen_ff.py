@@ -122,8 +122,8 @@ def main():
   if opt.proto:
     showPrototype()
 
-  a = setVar('x', 32, [1, 2, 3, 4], const=True, static=True)
-  setVar('y', 32, 4, static=True)
+  a = makeVar('x', 32, [1, 2, 3, 4], const=True, static=True)
+  makeVar('y', 32, 4, static=True)
   fff(a)
   term()
   return
