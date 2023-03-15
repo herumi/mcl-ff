@@ -230,11 +230,20 @@ def gen_get_prime(name, pStr):
   with Function(name, r):
     ret(bitcast(pStr, 8))
 
+primeTbl = {
+  'BLS12-381-p' : 0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab,
+  'BLS12-381-r' : 0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001,
+  'BN254-p' : 0x2523648240000001ba344d80000000086121000000000013a700000000000013,
+  'BN254-r' : 0x2523648240000001ba344d8000000007ff9f800000000010a10000000000000d,
+  'p511' : 0x65b48e8f740f89bffc8ab0d15e3e4c4ab42d083aedc88c425afbfcc69322c9cda7aac6c567f35507516730cc1f0b4f25c2721bf457aca8351b81b90533c6c87b,
+}
+
 def main():
   parser = argparse.ArgumentParser(description='gen bint')
   parser.add_argument('-u', type=int, default=64, help='unit')
   parser.add_argument('-n', type=int, default=0, help='max size of unit')
   parser.add_argument('-p', type=str, default='', help='characteristic of a finite field')
+  parser.add_argument('-type', type=str, default='BLS12-381-p', help='elliptic curve type')
   parser.add_argument('-proto', action='store_true', default=False, help='show prototype')
   parser.add_argument('-pre', type=str, default='mcl_fp_', help='prefix of a function name')
   parser.add_argument('-addn', type=int, default=0, help='mad size of add/sub')
@@ -243,9 +252,7 @@ def main():
     opt.n = 9 if opt.u == 64 else 17
     opt.addn = 16 if opt.u == 64 else 32
   if opt.p == '':
-    # BLS12-381
-    opt.p = '0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab'
-  opt.p = eval(opt.p)
+    opt.p = primeTbl[opt.type]
 
   setGlobalParam(opt)
   if opt.proto:

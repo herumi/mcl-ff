@@ -9,12 +9,6 @@ MCL_DIR?=../mcl
 BIT?=64
 # characteristic of a finite field
 TYPE?=BLS12-381-p
-ifeq ($(TYPE),BLS12-381-p)
-  P=0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab
-endif
-ifeq ($(TYPE),BLS12-381-r)
-  P=0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001
-endif
 # prefix of a function name
 NAME?=mcl_fp
 PRE?=$(NAME)_
@@ -43,7 +37,7 @@ endif
 all: $(TARGET)
 
 $(LL): gen_ff.py Makefile s_xbyak_llvm.py
-	$(PYTHON) $< -u $(BIT) -p $(P) -pre $(PRE) > $@
+	$(PYTHON) $< -u $(BIT) -type $(TYPE) -pre $(PRE) > $@
 
 $(NAME).o: $(LL)
 	$(CLANG) -c -o $@ $< $(CFLAGS)
