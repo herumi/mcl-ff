@@ -240,7 +240,7 @@ primeTbl = {
 
 def main():
   parser = argparse.ArgumentParser(description='gen bint')
-  parser.add_argument('-u', type=int, default=64, help='unit')
+  parser.add_argument('-u', type=int, default=64, help='unit bit size (64 or 32)')
   parser.add_argument('-n', type=int, default=0, help='max size of unit')
   parser.add_argument('-p', type=str, default='', help='characteristic of a finite field')
   parser.add_argument('-type', type=str, default='BLS12-381-p', help='elliptic curve type')
