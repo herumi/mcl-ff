@@ -10,7 +10,7 @@ using namespace mcl;
 static const size_t N = 6;
 
 static const int C = 100;
-static const int CC = 10000;
+static const int CC = 100000;
 
 CYBOZU_TEST_AUTO(init)
 {
