@@ -1,25 +1,30 @@
 #include <cybozu/test.hpp>
-#include <mcl/bls12_381.hpp>
 #include <cybozu/xorshift.hpp>
 #include <cybozu/benchmark.hpp>
 #include <mcl_fp.h>
+#include <mcl/fp.hpp>
 
-using namespace mcl::bn;
+typedef mcl::FpT<> Fp;
 using namespace mcl;
 
-static const size_t N = 6;
+size_t N;
 
 static const int C = 100;
-static const int CC = 100000;
+static const int CC = 1000000;
+
+static const size_t maxN = 8;
+Unit xa[maxN], ya[maxN], za[maxN];
 
 CYBOZU_TEST_AUTO(init)
 {
-	initPairing(BLS12_381);
+	const char *pStr = (const char*)mcl_fp_get_prime();
+	printf("p=%s\n", pStr);
+	Fp::init(pStr);
+	N = Fp::getOp().N;
 }
 
 CYBOZU_TEST_AUTO(add)
 {
-	Unit xa[N], ya[N], za[N];
 	Fp x, y, z;
 	cybozu::XorShift rg;
 	for (int i = 0; i < C; i++) {
@@ -37,7 +42,6 @@ CYBOZU_TEST_AUTO(add)
 
 CYBOZU_TEST_AUTO(sub)
 {
-	Unit xa[N], ya[N], za[N];
 	Fp x, y, z;
 	cybozu::XorShift rg;
 	for (int i = 0; i < C; i++) {
@@ -55,7 +59,6 @@ CYBOZU_TEST_AUTO(sub)
 
 CYBOZU_TEST_AUTO(mul)
 {
-	Unit xa[N], ya[N], za[N];
 	Fp x, y, z;
 	cybozu::XorShift rg;
 	for (int i = 0; i < C; i++) {

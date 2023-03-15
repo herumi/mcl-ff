@@ -224,6 +224,12 @@ def gen_mont(name, mont, pp, mulUnit):
       storeN(z, pz)
     ret(Void)
 
+def gen_get_prime(name, pStr):
+  resetGlobalIdx()
+  r = IntPtr(8)
+  with Function(name, r):
+    ret(bitcast(pStr, 8))
+
 def main():
   parser = argparse.ArgumentParser(description='gen bint')
   parser.add_argument('-u', type=int, default=64, help='unit')
@@ -247,6 +253,10 @@ def main():
 
   pp = makeVar('p', mont.bit, mont.p, const=True, static=True)
   ip = makeVar('ip', unit, mont.ip, const=True, static=True)
+  pStr = makeStrVar('pStr', hex(opt.p))
+
+  gen_get_prime(f'{opt.pre}get_prime', pStr)
+
   name = f'{opt.pre}add'
   gen_fp_add(name, mont.pn, pp)
   name = f'{opt.pre}sub'

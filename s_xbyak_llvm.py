@@ -3,6 +3,7 @@ INT_TYPE = 1
 IMM_TYPE = 2
 INT_PTR_TYPE = 3
 VAR_TYPE = 4
+STR_VAR_TYPE = 5
 
 eq = 1
 neq = 2
@@ -157,6 +158,8 @@ class Operand:
     self.name = name
     if t in [INT_TYPE, INT_PTR_TYPE]:
       self.idx = getGlobalIdx()
+    if t == STR_VAR_TYPE:
+      self.bit = len(self.imm) + 1
 
   def getFullName(self, noalias=False):
     return f'{self.getType(noalias)} {self.getName()}'
@@ -176,6 +179,8 @@ class Operand:
         return f'i{self.bit}'
       else:
         return f'[{len(self.imm)} x i{self.bit}]'
+    if self.t == STR_VAR_TYPE:
+        return f'[{self.bit} x i8]'
     raise Exception('no type')
 
   # get prototype declaration
@@ -199,9 +204,13 @@ class Operand:
       return str(self.imm)
     if self.t == VAR_TYPE:
       return f'*@{self.name}'
+    if self.t == STR_VAR_TYPE:
+      return f'*@{self.name}'
     return ''
 
-  def getValStr(self):
+  def getVarStr(self):
+    if self.t == STR_VAR_TYPE:
+      return f'c"{self.imm}\\00"'
     if self.t != VAR_TYPE:
       raise Exception('bad type', self.t)
     if type(self.imm) == int:
@@ -242,6 +251,11 @@ class Var(Operand):
   """
   def __init__(self, name, bit, imm):
     self = Operand.__init__(self, VAR_TYPE, bit, imm, name=name)
+
+class StrVar(Operand):
+  def __init__(self, name, v):
+    self = Operand.__init__(self, STR_VAR_TYPE, 0, v, name=name)
+
 
 Void = Operand(VOID_TYPE, 0)
 
@@ -348,7 +362,13 @@ def makeVar(name, bit, v, static=False, const=False):
     attr += ' constant'
   else:
     attr += ' global'
-  output(f'@{name} = {attr} {r.getType()} {r.getValStr()}')
+  output(f'@{name} = {attr} {r.getType()} {r.getVarStr()}')
+  return r
+
+def makeStrVar(name, v):
+  r = StrVar(name, v)
+  attr = 'private unnamed_addr constant'
+  output(f'@{name} = {attr} {r.getType()} {r.getVarStr()}')
   return r
 ####
 
