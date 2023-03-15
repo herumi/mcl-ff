@@ -87,7 +87,7 @@ class Function:
       for i in range(len(args)):
         if i > 0:
           s += ', '
-        s += args[i].getCtype()
+        s += args[i].getCtype(addConst=i > 0)
       s += ');'
       print(s)
       return
@@ -179,11 +179,15 @@ class Operand:
     raise Exception('no type')
 
   # get prototype declaration
-  def getCtype(self):
+  def getCtype(self, addConst=False):
     if self.t == INT_TYPE:
       return f'uint{self.bit}_t'
     if self.t == INT_PTR_TYPE:
-      return f'uint{self.bit}_t*'
+      s = ''
+      if addConst:
+        s += 'const '
+      s += f'uint{self.bit}_t*'
+      return s
     if self.t == VOID_TYPE:
       return 'void'
     raise Exception('no C type')
