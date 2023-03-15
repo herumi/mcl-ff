@@ -147,7 +147,7 @@ def gen_mulUnit(name, N, mulPos, extractHigh):
   z = Int(bu)
   px = IntPtr(unit)
   y = Int(unit)
-  with Function(name, z, px, y) as f:
+  with Function(name, z, px, y, private=True) as f:
     L = []
     H = []
     for i in range(N):
@@ -163,6 +163,66 @@ def gen_mulUnit(name, N, mulPos, extractHigh):
     z = add(LL, HH)
     ret(z)
   return f
+
+def gen_mont(name, mont, pp, mulUnit):
+  ip = mont.ip
+  N = mont.pn
+  bit = unit * N
+  bu = bit + unit
+  bu2 = bit + unit * 2
+  resetGlobalIdx()
+  pz = IntPtr(unit)
+  px = IntPtr(unit)
+  py = IntPtr(unit)
+  with Function(name, Void, pz, px, py):
+    pp = bitcast(pp, unit)
+    if mont.isFullBit:
+      for i in range(N):
+        y = load(getelementptr(py, i))
+        xy = call(mulUnit, px, y)
+        if i == 0:
+          a = zext(xy, bu2)
+          at = trunc(xy, unit)
+        else:
+          xy = zext(xy, bu2)
+          a = add(s, xy)
+          at = trunc(a, unit)
+        q = mul(at, ip)
+        pq = call(mulUnit, pp, q)
+        pq = zext(pq, bu2)
+        t = add(a, pq)
+        s = lshr(t, unit)
+
+      s = trunc(s, bu)
+      p = zext(loadN(pp, N), bu)
+      vc = sub(s, p)
+      c = trunc(lshr(vc, bit), 1)
+      z = select(c, s, vc)
+      z = trunc(z, bit)
+      storeN(z, pz)
+    else:
+      y = load(py)
+      xy = call(mulUnit, px, y)
+      c0 = trunc(xy, unit)
+      q = mul(c0, ip)
+      pq = call(mulUnit, pp, q)
+      t = add(xy, pq)
+      t = lshr(t, unit)
+      for i in range(1, N):
+        y = load(getelementptr(py, i))
+        xy = call(mulUnit, px, y)
+        t = add(t, xy)
+        c0 = trunc(t, unit)
+        q = mul(c0, ip)
+        pq = call(mulUnit, pp, q)
+        t = add(t, pq)
+        t = lshr(t, unit)
+      t = trunc(t, bit)
+      vc = sub(t, loadN(pp, N))
+      c = trunc(lshr(vc, bit - 1), 1)
+      z = select(c, t, vc)
+      storeN(z, pz)
+    ret(Void)
 
 def main():
   parser = argparse.ArgumentParser(description='gen bint')
@@ -196,7 +256,9 @@ def main():
   extractHigh = gen_extractHigh()
   mulPos = gen_mulPos(mulUU)
   name = f'{opt.pre}mulUnit'
-  gen_mulUnit(name, mont.pn, mulPos, extractHigh)
+  mulUnit = gen_mulUnit(name, mont.pn, mulPos, extractHigh)
+  name = f'{opt.pre}mont'
+  gen_mont(name, mont, pp, mulUnit)
 
   term()
 

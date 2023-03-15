@@ -344,7 +344,7 @@ def makeVar(name, bit, v, static=False, const=False):
     attr += ' constant'
   else:
     attr += ' global'
-  output(f'@{name} = {attr} {r.getType()} {r.getValStr()}, align 4')
+  output(f'@{name} = {attr} {r.getType()} {r.getValStr()}')
   return r
 ####
 

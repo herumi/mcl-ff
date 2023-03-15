@@ -23,8 +23,11 @@ $(HEADER): gen_ff.py Makefile
 	@echo '// p=$(P)' >> $@
 	@$(PYTHON) $< -u $(BIT) -proto >> $@
 
-asm: $(LL)
-	$(CLANG) -S -O2 $< -masm=intel -mbmi2 -o -
+x64asm: $(LL)
+	$(CLANG) -o - -S -O2 $< -masm=intel -mbmi2
+
+a64asm: $(LL)
+	$(CLANG) -o - -S -O2 $< --target=aarch64
 
 .PHONY: clean
 
