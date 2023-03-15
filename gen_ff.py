@@ -230,7 +230,7 @@ def main():
   parser.add_argument('-n', type=int, default=0, help='max size of unit')
   parser.add_argument('-p', type=str, default='', help='characteristic of a finite field')
   parser.add_argument('-proto', action='store_true', default=False, help='show prototype')
-  parser.add_argument('-pre', type=str, default='mclb_fp_', help='prefix of a function name')
+  parser.add_argument('-pre', type=str, default='mcl_fp_', help='prefix of a function name')
   parser.add_argument('-addn', type=int, default=0, help='mad size of add/sub')
   opt = parser.parse_args()
   if opt.n == 0:

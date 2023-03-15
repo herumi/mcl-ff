@@ -6,3 +6,6 @@
 	@license modified new BSD license
 	http://opensource.org/licenses/BSD-3-Clause
 */
+#ifdef __cplusplus
+extern "C" {
+#endif

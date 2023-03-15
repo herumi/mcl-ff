@@ -31,7 +31,7 @@ endif
 
 %.o: %.cpp
 	$(CXX) -c -o $@ $< $(CFLAGS) -MMD -MP -MF $(@:.o=.d)
-%.exe: %.o $(NAME).o
+%.exe: %.o $(NAME).o $(HEADER)
 	$(CXX) -o $@ $< $(LDFLAGS)
 
 all: $(TARGET)
@@ -46,6 +46,7 @@ $(HEADER): gen_ff.py Makefile
 	@cat header.h > $@
 	@echo '// p=$(P)' >> $@
 	@$(PYTHON) $< -u $(BIT) -proto >> $@
+	@cat tail.h >> $@
 
 test: $(TEST_EXE)
 	@sh -ec 'for i in $(TEST_EXE); do echo $$i; env LSAN_OPTIONS=verbosity=0:log_threads=1 ./$$i; done'
