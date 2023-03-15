@@ -1,6 +1,6 @@
 [![Build Status](https://github.com/herumi/mcl_ff/actions/workflows/main.yml/badge.svg)](https://github.com/herumi/mcl_ff/actions/workflows/main.yml)
 
-# mcl_ff
+# mcl-ff
 
 A code generator of low-level arithmetic functions for a finite field.
 
@@ -8,6 +8,11 @@ A code generator of low-level arithmetic functions for a finite field.
 
 gen_ff.py generates LLVM-IR code of low-level arithmetic functions of a given characteristic of a finite field.
 The performance on M1 Mac is also the highest speed.
+
+# Requirements
+
+- Python3
+- clang
 
 # License
 
