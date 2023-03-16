@@ -4,6 +4,10 @@ ifeq ($(findstring $(CXX),clang),)
   CLANG=$(CXX)
 endif
 MCL_DIR?=../mcl
+ARCH?=$(shell uname -m)
+ifeq ($(ARCH),x86_64)
+#  X64_ASM=1
+endif
 
 # register bit size
 BIT?=64
@@ -14,6 +18,7 @@ NAME?=mcl_fp
 PRE?=$(NAME)_
 LL=$(NAME).ll
 HEADER=$(NAME).h
+MCL_FF_OBJ=$(NAME).o
 
 TEST_SRC=fp_test.cpp
 TEST_EXE=$(TEST_SRC:.cpp=.exe)
@@ -22,7 +27,16 @@ DEPEND_FILE=$(TEST_SRC:.cpp=.d)
 TARGET=$(LL) $(HEADER) $(TEST_EXE)
 
 CFLAGS=-Wall -Wextra -I ./ -I $(MCL_DIR)/include -fPIC
-LDFLAGS=$(NAME).o -lmcl -L $(MCL_DIR)/lib
+LDFLAGS=$(MCL_FF_OBJ) -lmcl -L $(MCL_DIR)/lib
+
+ifeq ($(X64_ASM),1)
+$(NAME)_x64.S: gen_ff_x64.py
+	$(PYTHON) $< -m gas > $@
+$(NAME)_x64.o: $(NAME)_x64.S
+	$(CXX) -c -o $@ $< -fPIC
+CFLAGS+=-DMCL_FF_X64
+MCL_FF_OBJ+=$(NAME)_x64.o
+endif
 
 ifeq ($(DEBUG),1)
 else
@@ -31,7 +45,7 @@ endif
 
 %.o: %.cpp
 	$(CXX) -c -o $@ $< $(CFLAGS) -MMD -MP -MF $(@:.o=.d)
-%.exe: %.o $(NAME).o $(HEADER)
+%.exe: %.o $(MCL_FF_OBJ) $(HEADER)
 	$(CXX) -o $@ $< $(LDFLAGS)
 
 all: $(TARGET)
@@ -62,7 +76,7 @@ a64asm: $(LL)
 .PHONY: clean
 
 clean:
-	rm -rf *.s *.o *.d $(LL) $(HEADER)
+	rm -rf *.s *.S *.o *.d $(LL) $(HEADER)
 
 # don't remove these files automatically
 .SECONDARY: $(TEST_SRC:.cpp=.o)

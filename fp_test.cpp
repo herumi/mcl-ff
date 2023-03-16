@@ -3,6 +3,9 @@
 #include <cybozu/benchmark.hpp>
 #include <mcl_fp.h>
 #include <mcl/fp.hpp>
+#ifdef MCL_FF_X64
+extern "C" void mcl_fp_mont_fast(uint64_t*, const uint64_t*, const uint64_t*);
+#endif
 
 typedef mcl::FpT<> Fp;
 using namespace mcl;
@@ -69,6 +72,12 @@ CYBOZU_TEST_AUTO(mul)
 		Fp::mul(z, x, y);
 		mcl_fp_mont(za, xa, ya);
 		CYBOZU_TEST_EQUAL_ARRAY(za, z.getUnit(), N);
+#ifdef MCL_FF_X64
+printf("i=%d\n", i);
+		memset(za, 0, sizeof(xa));
+		mcl_fp_mont_fast(za, xa, ya);
+		CYBOZU_TEST_EQUAL_ARRAY(za, z.getUnit(), N);
+#endif
 	}
 	CYBOZU_BENCH_C("Fp::mul", CC, Fp::mul, z, x, y);
 	CYBOZU_BENCH_C("fp_mont", CC, mcl_fp_mont, za, xa, ya);
