@@ -7,7 +7,7 @@ A code generator of low-level arithmetic functions for a finite field.
 # Abstract
 
 gen_ff.py generates LLVM-IR code of low-level arithmetic functions of a given characteristic of a finite field.
-The performance on M1 Mac is also the highest speed.
+The performance on M1 Mac is almost the highest speed.
 
 # Requirements
 
