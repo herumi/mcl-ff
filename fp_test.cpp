@@ -73,7 +73,6 @@ CYBOZU_TEST_AUTO(mul)
 		mcl_fp_mont(za, xa, ya);
 		CYBOZU_TEST_EQUAL_ARRAY(za, z.getUnit(), N);
 #ifdef MCL_FF_X64
-printf("i=%d\n", i);
 		memset(za, 0, sizeof(xa));
 		mcl_fp_mont_fast(za, xa, ya);
 		CYBOZU_TEST_EQUAL_ARRAY(za, z.getUnit(), N);
@@ -81,4 +80,7 @@ printf("i=%d\n", i);
 	}
 	CYBOZU_BENCH_C("Fp::mul", CC, Fp::mul, z, x, y);
 	CYBOZU_BENCH_C("fp_mont", CC, mcl_fp_mont, za, xa, ya);
+#ifdef MCL_FF_X64
+	CYBOZU_BENCH_C("x64mont", CC, mcl_fp_mont_fast, za, xa, ya);
+#endif
 }

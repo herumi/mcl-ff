@@ -6,7 +6,7 @@ endif
 MCL_DIR?=../mcl
 ARCH?=$(shell uname -m)
 ifeq ($(ARCH),x86_64)
-#  X64_ASM=1
+  X64_ASM=1
 endif
 
 # register bit size
@@ -31,7 +31,7 @@ LDFLAGS=$(MCL_FF_OBJ) -lmcl -L $(MCL_DIR)/lib
 
 ifeq ($(X64_ASM),1)
 $(NAME)_x64.S: gen_ff_x64.py
-	$(PYTHON) $< -m gas > $@
+	$(PYTHON) $< -m gas > $@ -type $(TYPE)
 $(NAME)_x64.o: $(NAME)_x64.S
 	$(CXX) -c -o $@ $< -fPIC
 CFLAGS+=-DMCL_FF_X64
@@ -64,6 +64,12 @@ $(HEADER): gen_ff.py Makefile
 
 test: $(TEST_EXE)
 	@sh -ec 'for i in $(TEST_EXE); do echo $$i; env LSAN_OPTIONS=verbosity=0:log_threads=1 ./$$i; done'
+
+test_all:
+	$(MAKE) clean test TYPE=BLS12-381-p
+	$(MAKE) clean test TYPE=BLS12-381-r
+	$(MAKE) clean test TYPE=BN254-p
+	$(MAKE) clean test TYPE=BN254-r
 
 x64asm: $(LL)
 	$(CLANG) -o - -S -O2 $< -masm=intel -mbmi2

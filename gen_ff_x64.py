@@ -1,6 +1,7 @@
 import sys
 sys.path.append('../mcl/src')
 from s_xbyak import *
+from primetbl import *
 from mont import *
 import argparse
 
@@ -43,10 +44,6 @@ def sub_ex(x, y, noCF):
     sbb(x, y)
 
 def getAt(x, i):
-  if type(x) == Reg:
-    return x
-  if type(x) == Address:
-    return ptr(x + 8 * i)
   if type(x) == list:
     return x[i]
   if type(x) == tuple:
@@ -69,20 +66,28 @@ def getNum(x):
     return len(r)
   raise Exception(f'bad type={type(x)} x={x}, i={i}')
 
-def make_vec(op, x, y):
-  n = max(getNum(x), getNum(y))
-  for i in range(n):
-    op(getAt(x, i), getAt(y, i))
+def make_vec_pm(op, x, addr):
+  for i in range(len(x)):
+    op(getAt(x, i), ptr(addr + 8 * i))
+
+def make_vec_pp(op, x, y):
+  for i in range(len(x)):
+#    op(getAt(x, i), getAt(y, i))
+    op(x[i], y[i])
 
 # [addr] = x[]
 def store_mp(addr, x):
-  make_vec(mov, addr, x)
+  for i in range(len(x)):
+    mov(ptr(addr + 8 * i), x[i])
+
+def load_pm(x, addr):
+  make_vec_pm(mov, x, addr)
 
 def mov_pp(x, y):
-  make_vec(mov, x, y)
+  make_vec_pp(mov, x, y)
 
 def cmovc_pp(x, y):
-  make_vec(cmovc, x, y)
+  make_vec_pp(cmovc, x, y)
 
 def sub_pm(x, addr):
   n = len(x)
@@ -155,15 +160,14 @@ def gen_mont(name, mont):
         montgomery1(mont, pk, px, rax, t, t2, i == 0)
         if i < N - 1:
           pk = rotatePack(pk)
-      pk = pk[1:]
-      """
       keep = [pk[0], px, py, rdx]
+      pk = pk[1:]
       keep.extend(sf.t[N+1:])
       keep = keep[0:N]
+      assert len(keep) == N
       mov_pp(keep, pk)
       sub_pm(pk, rax) # z - p
       cmovc_pp(pk, keep)
-      """
       store_mp(pz, pk)
 
 def main():
