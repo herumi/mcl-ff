@@ -20,7 +20,6 @@ def setGlobalParam(opt):
 def gen_add(N):
   bit = unit * N
   resetGlobalIdx()
-  Int(unit)
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
