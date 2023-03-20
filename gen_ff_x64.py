@@ -146,6 +146,7 @@ def gen_mont(name, mont):
   N = mont.pn
   align(16)
   with FuncProc(name):
+    assert not mont.isFullBit
     with StackFrame(3, N+3, useRDX=True) as sf:
       pz = sf.p[0]
       px = sf.p[1]
