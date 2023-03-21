@@ -1,5 +1,5 @@
-import sys
-sys.path.append('../mcl/src')
+#import sys
+#sys.path.append('../mcl/src')
 from s_xbyak import *
 from primetbl import *
 from mont import *
