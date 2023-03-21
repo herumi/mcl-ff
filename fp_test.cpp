@@ -1,3 +1,4 @@
+#define CYBOZU_BENCH_USE_GETTIMEOFDAY
 #include <cybozu/test.hpp>
 #include <cybozu/xorshift.hpp>
 #include <cybozu/benchmark.hpp>
