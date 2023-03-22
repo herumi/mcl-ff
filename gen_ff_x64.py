@@ -93,7 +93,59 @@ def sub_pm(x, addr):
   n = len(x)
   for i in range(n):
     sub_ex(x[i], ptr(addr + i * 8), i == 0)
-  
+
+def gen_add(name, mont):
+  N = mont.pn
+  align(16)
+  with FuncProc(name):
+    assert not mont.isFullBit
+    n = min(N*2-2, 11)
+    with StackFrame(3, n) as sf:
+      pz = sf.p[0]
+      px = sf.p[1]
+      py = sf.p[2]
+      t1 = sf.t[0:N]
+      for i in range(N):
+        mov(t1[i], ptr(px + i * 8))
+        add_ex(t1[i], ptr(py + i * 8), i == 0)
+      t2 = sf.t[N:]
+      t2.append(px)
+      t2.append(py)
+      assert len(t2) == N
+      for i in range(N):
+        mov(t2[i], t1[i])
+        mov(rax, (mont.p >> (i*64))%(2**64))
+        sub_ex(t2[i], rax, i == 0)
+      for i in range(N):
+        cmovc(t2[i], t1[i])
+        mov(ptr(pz + i * 8), t2[i])
+
+def gen_sub(name, mont):
+  N = mont.pn
+  align(16)
+  with FuncProc(name):
+    assert not mont.isFullBit
+    n = min(N*2-2, 11)
+    with StackFrame(3, n) as sf:
+      pz = sf.p[0]
+      px = sf.p[1]
+      py = sf.p[2]
+      t1 = sf.t[0:N]
+      for i in range(N):
+        mov(t1[i], ptr(px + i * 8))
+        sub_ex(t1[i], ptr(py + i * 8), i == 0)
+      sbb(rax, rax) # -1 if x<y else 0
+      t2 = sf.t[N:]
+      t2.append(px)
+      t2.append(py)
+      assert len(t2) == N
+      # t2 = p if x<y else 0
+      for i in range(N):
+        mov(t2[i], (mont.p >> (i*64))%(2**64))
+        and_(t2[i], rax)
+      for i in range(N):
+        add_ex(t1[i], t2[i], i == 0)
+        mov(ptr(pz + i*8), t1[i])
 
 #  c[n..0] = c[n-1..0] + px[n-1..0] * rdx if is_cn_zero = True
 #  c[n..0] = c[n..0] + px[n-1..0] * rdx if is_cn_zero = False
@@ -142,7 +194,8 @@ def rotatePack(pk):
   t.append(pk[0])
   return t
 
-def gen_mont(name, mont):
+# Montgomery mul(x, y)
+def gen_mul(name, mont):
   N = mont.pn
   align(16)
   with FuncProc(name):
@@ -198,8 +251,12 @@ def main():
   makeVar('ip', unit, mont.ip, const=True, static=True)
   segment('text')
 
-  name = f'{opt.pre}mont_fast'
-  gen_mont(name, mont)
+  name = f'{opt.pre}add'
+  gen_add(name, mont)
+  name = f'{opt.pre}sub'
+  gen_sub(name, mont)
+  name = f'{opt.pre}mul'
+  gen_mul(name, mont)
 
   term()
 

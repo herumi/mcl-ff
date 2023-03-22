@@ -7,6 +7,7 @@ MCL_DIR?=../mcl
 ARCH?=$(shell uname -m)
 ifeq ($(ARCH),x86_64)
   X64_ASM=1
+  GEN_OPT=-x64
 endif
 
 # register bit size
@@ -51,7 +52,7 @@ endif
 all: $(TARGET)
 
 $(LL): gen_ff.py Makefile s_xbyak_llvm.py
-	$(PYTHON) $< -u $(BIT) -type $(TYPE) -pre $(PRE) > $@
+	$(PYTHON) $< -u $(BIT) -type $(TYPE) -pre $(PRE) $(GEN_OPT) > $@
 
 $(NAME).o: $(LL)
 	$(CLANG) -c -o $@ $< $(CFLAGS)

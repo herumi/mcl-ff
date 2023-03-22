@@ -164,7 +164,7 @@ def gen_mulUnit(name, N, mulPos, extractHigh):
     ret(z)
   return f
 
-def gen_mont(name, mont, pp, mulUnit):
+def gen_mul(name, mont, pp, mulUnit):
   ip = mont.ip
   N = mont.pn
   bit = unit * N
@@ -239,6 +239,7 @@ def main():
   parser.add_argument('-proto', action='store_true', default=False, help='show prototype')
   parser.add_argument('-pre', type=str, default='mcl_fp_', help='prefix of a function name')
   parser.add_argument('-addn', type=int, default=0, help='mad size of add/sub')
+  parser.add_argument('-x64', action='store_true', default=False, help='add x64 to name')
   opt = parser.parse_args()
   if opt.n == 0:
     opt.n = 9 if opt.u == 64 else 17
@@ -249,6 +250,7 @@ def main():
   setGlobalParam(opt)
   if opt.proto:
     showPrototype()
+  suf = '_x64' if opt.x64 else ''
 
   pp = makeVar('p', mont.bit, mont.p, const=True, static=True)
   ip = makeVar('ip', unit, mont.ip, const=True, static=True)
@@ -256,9 +258,9 @@ def main():
 
   gen_get_prime(f'{opt.pre}get_prime', pStr)
 
-  name = f'{opt.pre}add'
+  name = f'{opt.pre}add{suf}'
   gen_fp_add(name, mont.pn, pp)
-  name = f'{opt.pre}sub'
+  name = f'{opt.pre}sub{suf}'
   gen_fp_sub(name, mont.pn, pp)
 
   mulUU = gen_mulUU()
@@ -266,8 +268,8 @@ def main():
   mulPos = gen_mulPos(mulUU)
   name = f'{opt.pre}mulUnit'
   mulUnit = gen_mulUnit(name, mont.pn, mulPos, extractHigh)
-  name = f'{opt.pre}mont'
-  gen_mont(name, mont, pp, mulUnit)
+  name = f'{opt.pre}mul{suf}'
+  gen_mul(name, mont, pp, mulUnit)
 
   term()
 
