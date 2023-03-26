@@ -5,16 +5,16 @@ INT_PTR_TYPE = 3
 VAR_TYPE = 4
 STR_VAR_TYPE = 5
 
-eq = 1
-neq = 2
-ugt = 3
-uge = 4
-ult = 5
-ule = 6
-sgt = 7
-sge = 8
-slt = 9
-sle = 10
+eq = 'eq'
+neq = 'neq'
+ugt = 'ugt'
+uge = 'uge'
+ult = 'ult'
+ule = 'ule'
+sgt = 'sgt'
+sge = 'sge'
+slt = 'slt'
+sle = 'sle'
 
 g_showPrototype = False
 g_text = []
@@ -23,9 +23,13 @@ g_defLabelN = 1
 g_undefLabelN = 1
 g_globalIdx = 0
 g_labelIdx = 0
+g_phiIdx = 0
 
 def output(s):
   g_text.append(s)
+
+def appendOutput(line, s):
+  g_text[line] += s
 
 def getLine():
   return len(g_text)
@@ -230,6 +234,11 @@ class Operand:
     s += ']'
     return s
 
+  # phi
+  def link(self, v, label):
+    assert self.line != None
+    appendOutput(self.line, f', [{v.getName()}, %{label}]')
+
 class Int(Operand):
   def __init__(self, bit):
     self = Operand.__init__(self, INT_TYPE, bit)
@@ -359,6 +368,20 @@ def br(p1, p2=None, p3=None):
     output(f'br label %{p1}')
     return
   output(f'br i1 {p1.getName()}, label %{p2}, label %{p3}')
+
+def phi(v, label):
+  t = v.t
+  if t == IMM_TYPE:
+    t = INT_TYPE
+  r = Operand(t, v.bit)
+  r.line = getLine()
+  output(f'{r.getName()} = phi {r.getType()} [{v.getName()}, %{label}]')
+  return r
+
+def icmp(cond, v1, v2):
+  v = Int(1)
+  output(f'{v.getName()} = icmp {cond} i{v1.bit} {v1.getName()}, {v2.getName()}')
+  return v
 
 
 """
