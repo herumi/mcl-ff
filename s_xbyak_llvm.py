@@ -146,12 +146,6 @@ def genFunc(name):
     return output(name + ' ' + s)
   return f
 
-def CondTypeToStr(t):
-  tbl = [
-    "eq", "neq", "ugt", "uge", "ult", "ule", "sgt", "sge", "slt", "sle"
-  ]
-  return tbl[t-1]
-
 def getGlobalIdx():
   global g_globalIdx
   g_globalIdx += 1
@@ -369,13 +363,28 @@ def br(p1, p2=None, p3=None):
     return
   output(f'br i1 {p1.getName()}, label %{p2}, label %{p3}')
 
-def phi(v, label):
+# args is (v, label)[, (v2, label2), ...]
+def phi(*args):
+  assert type(args) is tuple
+  if isinstance(args[0], Operand) and type(args[1]) == Label:
+    ls = ((args[0], args[1]),)
+  elif isinstance(args[0][0], Operand) and type(args[0][1]) == Label:
+    ls = args
+  else:
+    raise Exception('phi : bad args')
+  v = ls[0][0]
   t = v.t
   if t == IMM_TYPE:
     t = INT_TYPE
   r = Operand(t, v.bit)
   r.line = getLine()
-  output(f'{r.getName()} = phi {r.getType()} [{v.getName()}, %{label}]')
+  s = f'{r.getName()} = phi {r.getType()}'
+  for i in range(len(ls)):
+    if i > 0:
+      s += ', '
+    (v, label) = ls[i]
+    s += f'[{v.getName()}, %{label}]'
+  output(s)
   return r
 
 def icmp(cond, v1, v2):
