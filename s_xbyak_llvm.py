@@ -22,12 +22,19 @@ g_undefLabel = {}
 g_defLabelN = 1
 g_undefLabelN = 1
 g_globalIdx = 0
+g_labelIdx = 0
 
 def output(s):
   g_text.append(s)
 
 def getLine():
   return len(g_text)
+
+def getDefLabel(n):
+  return f'L{n}'
+
+def getUndefLabel(n):
+  return f'L{n}_undef'
 
 def init():
   global g_text
@@ -346,6 +353,13 @@ def call(func, *args):
   output(s)
   if func.ret.t != VOID_TYPE:
     return r
+
+def br(p1, p2=None, p3=None):
+  if p2 is None:
+    output(f'br label %{p1}')
+    return
+  output(f'br i1 {p1.getName()}, label %{p2}, label %{p3}')
+
 
 """
 uint{bit}_t name = v; v is imm or array of imm
