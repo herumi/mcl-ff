@@ -83,7 +83,7 @@ a64asm: $(LL)
 .PHONY: clean
 
 clean:
-	rm -rf *.s *.S *.o *.d $(LL) $(HEADER)
+	rm -rf *.s *.S *.o *.d $(LL) $(HEADER) *.exe
 
 # don't remove these files automatically
 .SECONDARY: $(TEST_SRC:.cpp=.o)
