@@ -1,5 +1,3 @@
-#import sys
-#sys.path.append('../mcl/src')
 from s_xbyak import *
 from primetbl import *
 from mont import *
@@ -208,7 +206,7 @@ def gen_mul(name, mont):
       t = sf.t[N+1]
       t2 = sf.t[N+2]
 
-      lea(rax, ptr(rip+'PRE(p)'))
+      lea(rax, ptr(rip+'p'))
       for i in range(N):
         mov(rdx, ptr(py + i * 8))
         montgomery1(mont, pk, px, rax, t, t2, i == 0)
@@ -225,7 +223,7 @@ def gen_mul(name, mont):
       store_mp(pz, pk)
 
 def main():
-  parser = getDefaultParser()
+  parser = getDefaultParser('gen bint')
   parser.add_argument('-p', type=str, default='', help='characteristic of a finite field')
   parser.add_argument('-type', type=str, default='BLS12-381-p', help='elliptic curve type')
   parser.add_argument('-pre', type=str, default='mcl_fp_', help='prefix of a function name')
