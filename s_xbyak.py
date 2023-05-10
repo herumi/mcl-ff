@@ -1,6 +1,14 @@
-# static version of xbyak
-# This file provides a xbyak-like DSL to generate a asm code for nasm/yasm/gas .
+# s_xbyak : ASM generation tool for GAS/NASM/MASM with Xbyak-like syntax in Python
+# This file provides a Xbyak-like DSL to generate a asm code for nasm/yasm/gas .
+# i.e., static version of xbyak
+# Author : MITSUNARI Shigeo(@herumi)
+# License : modified new BSD license (http://opensource.org/licenses/BSD-3-Clause)
 import struct
+import re
+
+RE_HEX_STR=r'\b0x([0-9a-f]+)\b'
+
+VERSION="0.1.0"
 
 RAX = 0
 RCX = 1
@@ -287,14 +295,15 @@ class Address:
       r = self.copy()
       r.k = rhs
       return r
-#    elif rhs.kind == T_ATTR:
-#      r = self.copy()
-#      r.attr = mergeAttr(r.attr, rhs.attr)
-#      if hasattr(rhs, 'k'):
-#        r.k = rhs.k
-#      return r
     else:
       raise Exception('bad arg', k)
+
+  def __add__(self, v):
+    if not isinstance(v, int):
+      raise Exception('not int', v)
+    r = self.copy()
+    r.exp = r.exp + v
+    return r
 
 class RipReg:
   def __init__(self, v=0):
@@ -307,7 +316,10 @@ class RipReg:
 
   def __str__(self):
     if self.label:
-      s = str(self.label)
+      if g_gas and isinstance(self.label, str):
+        s = f'PRE({self.label})'
+      else:
+        s = str(self.label)
     else:
       s = ''
     if self.offset > 0:
@@ -594,6 +606,8 @@ def init(param):
     param.mode : asm mode (nasm|masm|gas)
   """
   mode = param.mode
+  if mode == 'masm':
+    param.win = True
   setWin64ABI(param.win)
   global g_nasm, g_gas, g_masm, g_text
   g_nasm = mode == 'nasm'
@@ -632,7 +646,7 @@ def init(param):
 ''')
 
 def addPRE(s):
-  if g_gas:
+  if g_gas and isinstance(s, str):
     return f'PRE({s})'
   else:
     return s
@@ -640,17 +654,17 @@ def addPRE(s):
 def output(s):
   g_text.append(s)
 
-g_segment_code = False
+g_segment_data = False
 
 def segment(mode):
   if g_masm:
-    global g_segment_code
-    if mode == 'code':
-      g_segment_code = True
+    global g_segment_data
+    if mode == 'data':
+      g_segment_data = True
     if mode == 'text':
-      if g_segment_code:
+      if g_segment_data:
         output(f'_data ends')
-        g_segment_code = False
+        g_segment_data = False
   if g_gas:
     output(f'.{mode}')
   elif g_masm:
@@ -676,10 +690,14 @@ def dq_(s):
 def global_(s):
   if g_gas:
     output(f'.global PRE({s})')
+    output(f'PRE({s}):')
   elif g_masm:
     output(f'public {s}')
+    output(f'{s}:')
   elif g_nasm:
     output(f'_global {s}')
+    if not win64ABI:
+      output(f'{s}:')
 def extern_(s, size):
   if g_gas:
     output(f'.extern PRE({s})')
@@ -755,11 +773,15 @@ def term():
     # QQQ (bad knowhow) remove unnecessary pattern
     if g_gas and s == 'mov %rdx, %r11' and g_text[i+1] == 'mov %r11, %rdx':
       i += 2
-    elif not g_gas and s == 'mov r11, rdx' and g_text[i+1] == 'mov rdx, r11':
+      continue
+    if not g_gas and s == 'mov r11, rdx' and g_text[i+1] == 'mov rdx, r11':
       i += 2
-    else:
-      print(s)
-      i += 1
+      continue
+    if g_masm:
+      ## convert 0x123a => 123ah
+      s = re.sub(RE_HEX_STR, r'\1h', s)
+    print(s)
+    i += 1
 
 def defineName(name):
   global_(name)
@@ -784,7 +806,6 @@ class FuncProc:
       return
     if g_gas:
       global_(name)
-      output(f'PRE({name}):')
       output(f'TYPE({self.name})')
       return
   def close(self):
@@ -839,10 +860,18 @@ def getNameSuffix(bit):
 
 def genFunc(name):
   def f(*args):
-    # special case (mov label, reg)
-    if g_gas and name == 'mov' and isinstance(args[1], str):
-      output(f'movabs ${args[1]}, {args[0]}')
-      return
+    # special case (mov reg, label)
+    if name == 'mov' and (isinstance(args[1], str) or isinstance(args[1], Label)):
+      if g_gas:
+        if isinstance(args[1], str):
+          s = f'{addPRE(args[1])}'
+        else:
+          s = str(args[1])
+        output(f'movabs {s}, {args[0]}')
+        return
+      if g_masm:
+        output(f'mov {args[0]}, offset {args[1]}')
+        return
     if not args:
       return output(name)
 
