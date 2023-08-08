@@ -389,6 +389,8 @@ def phi(*args):
 
 def icmp(cond, v1, v2):
   v = Int(1)
+  if isinstance(v2, int):
+    v2 = Imm(v2, v.bit)
   output(f'{v.getName()} = icmp {cond} i{v1.bit} {v1.getName()}, {v2.getName()}')
   return v
 
