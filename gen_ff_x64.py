@@ -1,3 +1,5 @@
+import sys
+sys.path.append('../s_xbyak')
 from s_xbyak import *
 from primetbl import *
 from mont import *
