@@ -35,7 +35,6 @@ $(NAME)_x64.S: gen_ff_x64.py
 	$(PYTHON) $< -m gas > $@ -type $(TYPE)
 $(NAME)_x64.o: $(NAME)_x64.S
 	$(CXX) -c -o $@ $< -fPIC
-CFLAGS+=-DMCL_FF_X64
 MCL_FF_OBJ+=$(NAME)_x64.o
 endif
 

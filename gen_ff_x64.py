@@ -247,10 +247,10 @@ def main():
   makeVar('ip', unit, mont.ip, const=True, static=True)
   segment('text')
 
-  name = f'{opt.pre}add'
-  gen_add(name, mont)
-  name = f'{opt.pre}sub'
-  gen_sub(name, mont)
+#  name = f'{opt.pre}add'
+#  gen_add(name, mont)
+#  name = f'{opt.pre}sub'
+#  gen_sub(name, mont)
   name = f'{opt.pre}mul'
   gen_mul(name, mont)
 

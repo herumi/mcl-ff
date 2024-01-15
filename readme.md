@@ -14,6 +14,9 @@ The performance on M1 Mac is almost the highest speed.
 - Python3
 - clang
 
+## x64
+The adcx, adox instructions available on Broadwell or later are required for this library.
+
 # License
 
 modified new BSD License

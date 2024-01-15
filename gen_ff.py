@@ -250,7 +250,6 @@ def main():
   setGlobalParam(opt)
   if opt.proto:
     showPrototype()
-  suf = '_x64' if opt.x64 else ''
 
   pp = makeVar('p', mont.bit, mont.p, const=True, static=True)
   ip = makeVar('ip', unit, mont.ip, const=True, static=True)
@@ -258,9 +257,9 @@ def main():
 
   gen_get_prime(f'{opt.pre}get_prime', pStr)
 
-  name = f'{opt.pre}add{suf}'
+  name = f'{opt.pre}add'
   gen_fp_add(name, mont.pn, pp)
-  name = f'{opt.pre}sub{suf}'
+  name = f'{opt.pre}sub'
   gen_fp_sub(name, mont.pn, pp)
 
   mulUU = gen_mulUU()
@@ -268,8 +267,9 @@ def main():
   mulPos = gen_mulPos(mulUU)
   name = f'{opt.pre}mulUnit'
   mulUnit = gen_mulUnit(name, mont.pn, mulPos, extractHigh)
-  name = f'{opt.pre}mul{suf}'
-  gen_mul(name, mont, pp, mulUnit)
+  if not opt.x64:
+    name = f'{opt.pre}mul'
+    gen_mul(name, mont, pp, mulUnit)
 
   term()
 
