@@ -1,5 +1,4 @@
 import sys
-sys.path.append('../s_xbyak')
 from s_xbyak import *
 from primetbl import *
 from mont import *
@@ -10,6 +9,8 @@ unit2 = 0
 MASK = 0
 mont = None
 
+SIMD_BYTE = 64
+
 def setGlobalParam(opt):
   global unit, unit2, MASK
   unit = opt.u
@@ -19,6 +20,7 @@ def setGlobalParam(opt):
   global mont
   mont = Montgomery(opt.p, unit)
 
+"""
 primeTbl = {
   'BLS12-381-p' : 0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab,
   'BLS12-381-r' : 0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001,
@@ -26,6 +28,7 @@ primeTbl = {
   'BN254-r' : 0x2523648240000001ba344d8000000007ff9f800000000010a10000000000000d,
   'p511' : 0x65b48e8f740f89bffc8ab0d15e3e4c4ab42d083aedc88c425afbfcc69322c9cda7aac6c567f35507516730cc1f0b4f25c2721bf457aca8351b81b90533c6c87b,
 }
+"""
 
 # add(x, y) if noCF is True
 # adc(x, y) if noCF is False
@@ -245,14 +248,16 @@ def main():
   makeVar('p', mont.bit, mont.p, const=True, static=True)
   makeVar('zero', mont.bit, 0, const=True, static=True)
   makeVar('ip', unit, mont.ip, const=True, static=True)
+  makeVar('vmask', 64, (1<<52)-1, const=True, static=True)
   segment('text')
 
 #  name = f'{opt.pre}add'
 #  gen_add(name, mont)
 #  name = f'{opt.pre}sub'
 #  gen_sub(name, mont)
-  name = f'{opt.pre}mul'
-  gen_mul(name, mont)
+  if not mont.isFullBit:
+    name = f'{opt.pre}mul'
+    gen_mul(name, mont)
 
   term()
 

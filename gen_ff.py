@@ -267,7 +267,7 @@ def main():
   mulPos = gen_mulPos(mulUU)
   name = f'{opt.pre}mulUnit'
   mulUnit = gen_mulUnit(name, mont.pn, mulPos, extractHigh)
-  if not opt.x64:
+  if not opt.x64 or mont.isFullBit:
     name = f'{opt.pre}mul'
     gen_mul(name, mont, pp, mulUnit)
 

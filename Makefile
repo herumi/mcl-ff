@@ -70,6 +70,8 @@ test_all:
 	$(MAKE) clean test TYPE=BLS12-381-r
 	$(MAKE) clean test TYPE=BN254-p
 	$(MAKE) clean test TYPE=BN254-r
+#	$(MAKE) clean test TYPE=secp256k1-p # does not support non-montgomery
+	$(MAKE) clean test TYPE=secp256k1-r
 
 x64asm: $(LL)
 	$(CLANG) -o - -S -O2 $< -masm=intel -mbmi2

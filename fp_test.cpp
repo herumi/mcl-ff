@@ -70,6 +70,15 @@ CYBOZU_TEST_AUTO(mul)
 		Fp::mul(z, x, y);
 		mcl_fp_mul(za, xa, ya);
 		CYBOZU_TEST_EQUAL_ARRAY(za, z.getUnit(), N);
+#if 0
+		if (!bint::cmpEqN(za, z.getUnit(), N)) {
+			bint::dump(xa, N, "xa");
+			bint::dump(ya, N, "ya");
+			bint::dump(za, N, "za");
+			bint::dump(z.getUnit(), N, "zb");
+			exit(1);
+		}
+#endif
 	}
 	CYBOZU_BENCH_C("fp_mul", CC, mcl_fp_mul, za, xa, ya);
 }
