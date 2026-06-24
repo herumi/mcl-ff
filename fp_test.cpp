@@ -3,10 +3,10 @@
 #include <cybozu/xorshift.hpp>
 #include <cybozu/benchmark.hpp>
 #include <mcl_fp.h>
-#include <mcl/fp.hpp>
+#include <mcl/fp_def.hpp>
 
-typedef mcl::FpT<> Fp;
 using namespace mcl;
+using namespace mcl::fp;
 
 size_t N;
 
