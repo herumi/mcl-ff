@@ -218,6 +218,8 @@ def main():
   parser.add_argument('-p', type=str, default='', help='characteristic of a finite field')
   parser.add_argument('-type', type=str, default='BLS12-381-p', help='elliptic curve type')
   parser.add_argument('-pre', type=str, default='mcl_fp_', help='prefix of a function name')
+  parser.add_argument('-add', action='store_true', default=False, help='add add function')
+  parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
   opt = parser.parse_args()
 
   init(opt)
@@ -237,10 +239,12 @@ def main():
   makeVar('vmask', 64, (1<<52)-1, const=True, static=True)
   segment('text')
 
-#  name = f'{opt.pre}add'
-#  gen_add(name, mont)
-#  name = f'{opt.pre}sub'
-#  gen_sub(name, mont)
+  if opt.add:
+    name = f'{opt.pre}add'
+    gen_add(name, mont)
+  if opt.sub:
+    name = f'{opt.pre}sub'
+    gen_sub(name, mont)
   if not mont.isFullBit:
     name = f'{opt.pre}mul'
     gen_mul(name, mont)
