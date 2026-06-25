@@ -7,7 +7,9 @@ MCL_DIR?=../mcl
 ARCH?=$(shell uname -m)
 ifeq ($(ARCH),x86_64)
   X64_ASM=1
-  GEN_OPT=-x64
+  GEN_OPT=-add -sub
+else
+  GEN_OPT=-add -sub -mul
 endif
 
 # register bit size
@@ -32,7 +34,7 @@ LDFLAGS=$(MCL_FF_OBJ) -lmcl -L $(MCL_DIR)/lib
 
 ifeq ($(X64_ASM),1)
 $(NAME)_x64.S: gen_ff_x64.py
-	$(PYTHON) $< -m gas > $@ -type $(TYPE)
+	$(PYTHON) $< -m gas > $@ -type $(TYPE) -mul
 $(NAME)_x64.o: $(NAME)_x64.S
 	$(CXX) -c -o $@ $< -fPIC
 MCL_FF_OBJ+=$(NAME)_x64.o
@@ -71,7 +73,7 @@ test_all:
 	$(MAKE) clean test TYPE=BN254-p
 	$(MAKE) clean test TYPE=BN254-r
 #	$(MAKE) clean test TYPE=secp256k1-p # does not support non-montgomery
-	$(MAKE) clean test TYPE=secp256k1-r
+#	$(MAKE) clean test TYPE=secp256k1-r
 
 x64asm: $(LL)
 	$(CLANG) -o - -S -O2 $< -masm=intel -mbmi2

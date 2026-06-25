@@ -229,7 +229,10 @@ def main():
   parser.add_argument('-proto', action='store_true', default=False, help='show prototype')
   parser.add_argument('-pre', type=str, default='mcl_fp_', help='prefix of a function name')
   parser.add_argument('-addn', type=int, default=0, help='mad size of add/sub')
-  parser.add_argument('-x64', action='store_true', default=False, help='add x64 to name')
+  parser.add_argument('-add', action='store_true', default=False, help='add add function')
+  parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
+  parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
+
   opt = parser.parse_args()
   if opt.n == 0:
     opt.n = 9 if opt.u == 64 else 17
@@ -242,6 +245,9 @@ def main():
   unit = mont.L
   unit2 = mont.L2
   if opt.proto:
+    opt.add = True
+    opt.sub = True
+    opt.mul = True
     showPrototype()
 
   pp = makeVar('p', mont.bit, mont.p, const=True, static=True)
@@ -250,17 +256,20 @@ def main():
 
   gen_get_prime(f'{opt.pre}get_prime', pStr)
 
-  name = f'{opt.pre}add'
-  gen_fp_add(name, mont.pn, pp)
-  name = f'{opt.pre}sub'
-  gen_fp_sub(name, mont.pn, pp)
+  if opt.add:
+    name = f'{opt.pre}add'
+    gen_fp_add(name, mont.pn, pp)
+  if opt.sub:
+    name = f'{opt.pre}sub'
+    gen_fp_sub(name, mont.pn, pp)
 
   mulUU = gen_mulUU()
   extractHigh = gen_extractHigh()
   mulPos = gen_mulPos(mulUU)
   name = f'{opt.pre}mulUnit'
   mulUnit = gen_mulUnit(name, mont.pn, mulPos, extractHigh)
-  if not opt.x64 or mont.isFullBit:
+
+  if opt.mul and not mont.isFullBit:
     name = f'{opt.pre}mul'
     gen_mul(name, mont, pp, mulUnit)
 

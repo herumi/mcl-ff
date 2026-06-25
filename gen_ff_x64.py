@@ -220,6 +220,7 @@ def main():
   parser.add_argument('-pre', type=str, default='mcl_fp_', help='prefix of a function name')
   parser.add_argument('-add', action='store_true', default=False, help='add add function')
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
+  parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
   opt = parser.parse_args()
 
   init(opt)
@@ -245,7 +246,7 @@ def main():
   if opt.sub:
     name = f'{opt.pre}sub'
     gen_sub(name, mont)
-  if not mont.isFullBit:
+  if opt.mul and not mont.isFullBit:
     name = f'{opt.pre}mul'
     gen_mul(name, mont)
 
