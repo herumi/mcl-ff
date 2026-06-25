@@ -4,21 +4,7 @@ from primetbl import *
 from mont import *
 import argparse
 
-unit = 0
-unit2 = 0
-MASK = 0
-mont = None
-
 SIMD_BYTE = 64
-
-def setGlobalParam(opt):
-  global unit, unit2, MASK
-  unit = opt.u
-  unit2 = unit * 2
-  MASK = (1 << unit) - 1
-
-  global mont
-  mont = Montgomery(opt.p, unit)
 
 """
 primeTbl = {
@@ -240,14 +226,14 @@ def main():
   if opt.p == '':
     opt.p = primeTbl[opt.type]
 
-  setGlobalParam(opt)
+  mont = Montgomery(opt.p, opt.u)
   if opt.proto:
     showPrototype()
 
   segment('data')
   makeVar('p', mont.bit, mont.p, const=True, static=True)
   makeVar('zero', mont.bit, 0, const=True, static=True)
-  makeVar('ip', unit, mont.ip, const=True, static=True)
+  makeVar('ip', opt.u, mont.ip, const=True, static=True)
   makeVar('vmask', 64, (1<<52)-1, const=True, static=True)
   segment('text')
 

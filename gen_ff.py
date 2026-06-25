@@ -5,17 +5,7 @@ import argparse
 
 unit = 0
 unit2 = 0
-MASK = 0
 mont = None
-
-def setGlobalParam(opt):
-  global unit, unit2, MASK
-  unit = opt.u
-  unit2 = unit * 2
-  MASK = (1 << unit) - 1
-
-  global mont
-  mont = Montgomery(opt.p, unit)
 
 def gen_add(N):
   bit = unit * N
@@ -247,7 +237,10 @@ def main():
   if opt.p == '':
     opt.p = primeTbl[opt.type]
 
-  setGlobalParam(opt)
+  global mont, unit, unit2
+  mont = Montgomery(opt.p, opt.u)
+  unit = mont.L
+  unit2 = mont.L2
   if opt.proto:
     showPrototype()
 
