@@ -1,3 +1,10 @@
+# s_xbyak_llvm : LLVM-IR generation tool with Xbyak-like syntax in Python
+# This file provides a Xbyak-like DSL to generate a asm code for LLVM-IR.
+# Author : MITSUNARI Shigeo(@herumi)
+# License : modified new BSD license (http://opensource.org/licenses/BSD-3-Clause)
+
+VERSION="0.9.0"
+
 VOID_TYPE = 0
 INT_TYPE = 1
 IMM_TYPE = 2
@@ -327,9 +334,12 @@ def store(x, v):
   output(f'store {x.getFullName()}, {v.getFullName()}')
 
 # r = op x
-def load(x):
+# volatile forces a standalone load (not folded into an ALU memory operand),
+# which avoids the slower store-to-load forwarding of a folded load on x64.
+def load(x, volatile=False):
   r = Int(x.bit)
-  output(f'{r.getName()} = load {r.getType()}, {x.getFullName()}')
+  v = 'volatile ' if volatile else ''
+  output(f'{r.getName()} = load {v}{r.getType()}, {x.getFullName()}')
   return r
 
 def getelementptr(x, v):
@@ -420,12 +430,12 @@ def makeStrVar(name, v):
   return r
 ####
 
-def loadN(p, n, offset=0):
+def loadN(p, n, offset=0, volatile=False):
   if offset != 0:
     p = getelementptr(p, offset)
   if n > 1:
     p = bitcast(p, p.bit * n)
-  return load(p)
+  return load(p, volatile)
 
 def storeN(r, p, offset=0):
   if offset != 0:
