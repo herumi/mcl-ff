@@ -76,7 +76,7 @@ bench_llvm.ll: gen_ff.py
 bench_x64.S: gen_ff_x64.py
 	$(PYTHON) gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul > $@
 bench_llvm.o: bench_llvm.ll
-	$(CLANG) -c -o $@ $< $(CFLAGS)
+	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
 bench_x64.o: bench_x64.S
 	$(CXX) -c -o $@ $< -fPIC
 $(BENCH_EXE): misc/bench.cpp bench_llvm.o bench_x64.o
@@ -84,13 +84,18 @@ $(BENCH_EXE): misc/bench.cpp bench_llvm.o bench_x64.o
 bench: $(BENCH_EXE)
 	./$(BENCH_EXE)
 
+# secp256k1-p/r are excluded because they do not support non-montgomery
+TYPE_TBL=BLS12-381-p BLS12-381-r BN254-p BN254-r
+
 test_all:
-	$(MAKE) clean test TYPE=BLS12-381-p
-	$(MAKE) clean test TYPE=BLS12-381-r
-	$(MAKE) clean test TYPE=BN254-p
-	$(MAKE) clean test TYPE=BN254-r
-#	$(MAKE) clean test TYPE=secp256k1-p # does not support non-montgomery
-#	$(MAKE) clean test TYPE=secp256k1-r
+	@for t in $(TYPE_TBL); do \
+		echo $$t ; $(MAKE) clean test TYPE=$$t || exit 1; \
+	done
+
+bench_all:
+	@for t in $(TYPE_TBL); do \
+		echo $$t ; $(MAKE) clean bench TYPE=$$t || exit 1; \
+	done
 
 x64asm: $(LL)
 	$(CLANG) -o - -S -O2 $< -masm=intel -mbmi2
