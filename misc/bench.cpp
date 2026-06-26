@@ -2,6 +2,8 @@
 // gen_ff_x64.py (x64 asm) within a single executable.
 //
 // Both generators emit under distinct prefixes (llvm_ / x64_) so they coexist.
+// llvm_var_mul is the -var-p variant: p/ip are read from a runtime array
+// (llvm_var_param) instead of being baked in as immediates.
 // Built and run via the `bench` target in the Makefile.
 #include <cstdint>
 #include <cstdio>
@@ -15,6 +17,9 @@ extern "C" {
   void llvm_add(uint64_t*, const uint64_t*, const uint64_t*);
   void llvm_sub(uint64_t*, const uint64_t*, const uint64_t*);
   void llvm_mul(uint64_t*, const uint64_t*, const uint64_t*);
+  void llvm_var_add(uint64_t*, const uint64_t*, const uint64_t*);
+  void llvm_var_sub(uint64_t*, const uint64_t*, const uint64_t*);
+  void llvm_var_mul(uint64_t*, const uint64_t*, const uint64_t*);
   void x64_add(uint64_t*, const uint64_t*, const uint64_t*);
   void x64_sub(uint64_t*, const uint64_t*, const uint64_t*);
   void x64_mul(uint64_t*, const uint64_t*, const uint64_t*);
@@ -57,28 +62,44 @@ static double bench_throughput(FpOp f, long loop) {
 struct Entry {
   const char* op;
   FpOp llvm;
+  FpOp var; // -var-p variant, or nullptr if none
   FpOp x64;
   long loop;
 };
 
+static void row(const char* op, const char* mode,
+                double ll, double var, double x64, bool hasVar) {
+  if (hasVar)
+    printf("%-5s %-12s %10.3f %10.3f %10.3f %9.2f %9.2f\n",
+           op, mode, ll, var, x64, ll / x64, var / x64);
+  else
+    printf("%-5s %-12s %10.3f %10s %10.3f %9.2f %9s\n",
+           op, mode, ll, "-", x64, ll / x64, "-");
+}
+
 int main() {
   const Entry tbl[] = {
-    {"add", llvm_add, x64_add, 200000000},
-    {"sub", llvm_sub, x64_sub, 200000000},
-    {"mul", llvm_mul, x64_mul,  50000000},
+    {"add", llvm_add, llvm_var_add, x64_add, 200000000},
+    {"sub", llvm_sub, llvm_var_sub, x64_sub, 200000000},
+    {"mul", llvm_mul, llvm_var_mul, x64_mul,  50000000},
   };
-  printf("unit: ns/op (smaller is faster), ratio = llvm / x64\n");
-  printf("%-5s %-12s %10s %10s %8s\n", "op", "mode", "llvm", "x64", "ratio");
+  printf("unit: ns/op (smaller is faster); var = -var-p (runtime p/ip)\n");
+  printf("%-5s %-12s %10s %10s %10s %9s %9s\n",
+         "op", "mode", "llvm", "var", "x64", "llvm/x64", "var/x64");
   for (const Entry& e : tbl) {
+    bool hv = e.var != nullptr;
     // warmup
     bench_latency(e.llvm, e.loop / 10);
     bench_latency(e.x64, e.loop / 10);
+    if (hv) bench_latency(e.var, e.loop / 10);
     double ll = bench_latency(e.llvm, e.loop);
     double lx = bench_latency(e.x64, e.loop);
+    double lv = hv ? bench_latency(e.var, e.loop) : 0;
     double tl = bench_throughput(e.llvm, e.loop);
     double tx = bench_throughput(e.x64, e.loop);
-    printf("%-5s %-12s %10.3f %10.3f %8.2f\n", e.op, "latency",    ll, lx, ll / lx);
-    printf("%-5s %-12s %10.3f %10.3f %8.2f\n", e.op, "throughput", tl, tx, tl / tx);
+    double tv = hv ? bench_throughput(e.var, e.loop) : 0;
+    row(e.op, "latency",    ll, lv, lx, hv);
+    row(e.op, "throughput", tl, tv, tx, hv);
   }
   return 0;
 }

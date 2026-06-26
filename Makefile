@@ -73,14 +73,18 @@ test: $(TEST_EXE)
 BENCH_EXE=bench.exe
 bench_llvm.ll: gen_ff.py
 	$(PYTHON) gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul > $@
+bench_llvm_var.ll: gen_ff.py
+	$(PYTHON) gen_ff.py -u 64 -type $(TYPE) -pre llvm_var_ -add -sub -mul -var-p > $@
 bench_x64.S: gen_ff_x64.py
 	$(PYTHON) gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul > $@
 bench_llvm.o: bench_llvm.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
+bench_llvm_var.o: bench_llvm_var.ll
+	$(CLANG) -c -o $@ $< $(CFLAGS)
 bench_x64.o: bench_x64.S
 	$(CXX) -c -o $@ $< -fPIC
-$(BENCH_EXE): misc/bench.cpp bench_llvm.o bench_x64.o
-	$(CXX) -o $@ $< bench_llvm.o bench_x64.o $(CFLAGS)
+$(BENCH_EXE): misc/bench.cpp bench_llvm.o bench_llvm_var.o bench_x64.o
+	$(CXX) -o $@ $< bench_llvm.o bench_llvm_var.o bench_x64.o $(CFLAGS)
 bench: $(BENCH_EXE)
 	./$(BENCH_EXE)
 
