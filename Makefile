@@ -5,12 +5,6 @@ ifeq ($(findstring $(CXX),clang),)
 endif
 MCL_DIR?=../mcl
 ARCH?=$(shell uname -m)
-ifeq ($(ARCH),x86_64)
-  X64_ASM=1
-  GEN_OPT=-add -sub
-else
-  GEN_OPT=-add -sub -mul
-endif
 
 # register bit size
 BIT?=64
@@ -32,7 +26,14 @@ TARGET=$(LL) $(HEADER) $(TEST_EXE)
 CFLAGS=-Wall -Wextra -I ./ -I $(MCL_DIR)/include -fPIC
 LDFLAGS=$(MCL_FF_OBJ) -lmcl -L $(MCL_DIR)/lib
 
-ifeq ($(X64_ASM),1)
+ifeq ($(ARCH),x86_64)
+  GEN_OPT=-add -sub
+  CFLAGS+=-mbmi2
+else
+  GEN_OPT=-add -sub -mul
+endif
+
+ifeq ($(ARCH),x86_64)
 $(NAME)_x64.S: gen_ff_x64.py
 	$(PYTHON) $< -m gas > $@ -type $(TYPE) -mul
 $(NAME)_x64.o: $(NAME)_x64.S
@@ -67,6 +68,22 @@ $(HEADER): gen_ff.py Makefile
 test: $(TEST_EXE)
 	@sh -ec 'for i in $(TEST_EXE); do echo $$i; env LSAN_OPTIONS=verbosity=0:log_threads=1 ./$$i; done'
 
+# Generate add/sub/mul from gen_ff.py (LLVM) and gen_ff_x64.py (x64 asm) under
+# distinct prefixes and compare them within a single executable (misc/bench.cpp).
+BENCH_EXE=bench.exe
+bench_llvm.ll: gen_ff.py
+	$(PYTHON) gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul > $@
+bench_x64.S: gen_ff_x64.py
+	$(PYTHON) gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul > $@
+bench_llvm.o: bench_llvm.ll
+	$(CLANG) -c -o $@ $< $(CFLAGS)
+bench_x64.o: bench_x64.S
+	$(CXX) -c -o $@ $< -fPIC
+$(BENCH_EXE): misc/bench.cpp bench_llvm.o bench_x64.o
+	$(CXX) -o $@ $< bench_llvm.o bench_x64.o $(CFLAGS)
+bench: $(BENCH_EXE)
+	./$(BENCH_EXE)
+
 test_all:
 	$(MAKE) clean test TYPE=BLS12-381-p
 	$(MAKE) clean test TYPE=BLS12-381-r
@@ -83,10 +100,10 @@ a64asm: $(LL)
 
 -include $(DEPEND_FILE)
 
-.PHONY: clean
+.PHONY: clean bench
 
 clean:
-	rm -rf *.s *.S *.o *.d $(LL) $(HEADER) *.exe
+	rm -rf *.s *.S *.o *.d *.ll $(HEADER) *.exe
 
 # don't remove these files automatically
 .SECONDARY: $(TEST_SRC:.cpp=.o)
