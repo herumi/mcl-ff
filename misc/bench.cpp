@@ -4,6 +4,9 @@
 // Both generators emit under distinct prefixes (llvm_ / x64_) so they coexist.
 // llvm_var_mul is the -var-p variant: p/ip are read from a runtime array
 // (llvm_var_param) instead of being baked in as immediates.
+// llvm_argp_mul is the -arg-p variant: a pointer to struct { uint64_t ip;
+// uint64_t p[N]; } is passed as the 4th argument. It reuses llvm_var_param,
+// which has exactly that [ip, p[N]] layout, so it runs on identical data.
 // Built and run via the `bench` target in the Makefile.
 #include <cstdint>
 #include <cstdio>
@@ -12,6 +15,9 @@
 static const int N = 6; // BLS12-381: 6 limbs (64bit)
 
 typedef void (*FpOp)(uint64_t* z, const uint64_t* x, const uint64_t* y);
+// mul with the prime context passed as the 4th argument.
+typedef void (*FpOp4)(uint64_t* z, const uint64_t* x, const uint64_t* y,
+                      const uint64_t* p);
 
 extern "C" {
   void llvm_add(uint64_t*, const uint64_t*, const uint64_t*);
@@ -20,6 +26,10 @@ extern "C" {
   void llvm_var_add(uint64_t*, const uint64_t*, const uint64_t*);
   void llvm_var_sub(uint64_t*, const uint64_t*, const uint64_t*);
   void llvm_var_mul(uint64_t*, const uint64_t*, const uint64_t*);
+  void llvm_argp_mul(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
+  // [ip, p[N]] array emitted by the -var-p generator; same layout as the
+  // struct { uint64_t ip; uint64_t p[N]; } expected by llvm_argp_mul.
+  extern const uint64_t llvm_var_param[];
   void x64_add(uint64_t*, const uint64_t*, const uint64_t*);
   void x64_sub(uint64_t*, const uint64_t*, const uint64_t*);
   void x64_mul(uint64_t*, const uint64_t*, const uint64_t*);
@@ -59,47 +69,93 @@ static double bench_throughput(FpOp f, long loop) {
   return std::chrono::duration<double, std::nano>(t1 - t0).count() / (m * 4);
 }
 
+// 4-argument variants for the -arg-p mul (prime context as the 4th argument).
+static double bench_latency4(FpOp4 f, const uint64_t* prm, long loop) {
+  alignas(64) uint64_t z[N] = {1, 2, 3, 4, 5, 6};
+  auto t0 = std::chrono::steady_clock::now();
+  for (long i = 0; i < loop; i++) {
+    f(z, z, Y, prm);
+  }
+  auto t1 = std::chrono::steady_clock::now();
+  volatile uint64_t sink = z[0]; (void)sink;
+  return std::chrono::duration<double, std::nano>(t1 - t0).count() / loop;
+}
+
+static double bench_throughput4(FpOp4 f, const uint64_t* prm, long loop) {
+  alignas(64) uint64_t a[4][N];
+  for (int k = 0; k < 4; k++)
+    for (int j = 0; j < N; j++) a[k][j] = j + k + 1;
+  long m = loop / 4;
+  auto t0 = std::chrono::steady_clock::now();
+  for (long i = 0; i < m; i++) {
+    f(a[0], a[0], Y, prm);
+    f(a[1], a[1], Y, prm);
+    f(a[2], a[2], Y, prm);
+    f(a[3], a[3], Y, prm);
+  }
+  auto t1 = std::chrono::steady_clock::now();
+  volatile uint64_t sink = a[0][0] + a[1][1] + a[2][2] + a[3][3]; (void)sink;
+  return std::chrono::duration<double, std::nano>(t1 - t0).count() / (m * 4);
+}
+
 struct Entry {
   const char* op;
   FpOp llvm;
-  FpOp var; // -var-p variant, or nullptr if none
+  FpOp var;   // -var-p variant, or nullptr if none
+  FpOp4 argp; // -arg-p variant (4th-arg pointer), or nullptr if none
   FpOp x64;
   long loop;
 };
 
+static void cell(double v, bool has) {
+  if (has) printf(" %10.3f", v); else printf(" %10s", "-");
+}
+static void ratio(double a, double b, bool has) {
+  if (has) printf(" %9.2f", a / b); else printf(" %9s", "-");
+}
+
 static void row(const char* op, const char* mode,
-                double ll, double var, double x64, bool hasVar) {
-  if (hasVar)
-    printf("%-5s %-12s %10.3f %10.3f %10.3f %9.2f %9.2f\n",
-           op, mode, ll, var, x64, ll / x64, var / x64);
-  else
-    printf("%-5s %-12s %10.3f %10s %10.3f %9.2f %9s\n",
-           op, mode, ll, "-", x64, ll / x64, "-");
+                double ll, double var, double argp, double x64,
+                bool hasVar, bool hasArgp) {
+  printf("%-5s %-12s", op, mode);
+  cell(ll, true);
+  cell(var, hasVar);
+  cell(argp, hasArgp);
+  cell(x64, true);
+  ratio(ll, x64, true);
+  ratio(var, x64, hasVar);
+  ratio(argp, x64, hasArgp);
+  printf("\n");
 }
 
 int main() {
   const Entry tbl[] = {
-    {"add", llvm_add, llvm_var_add, x64_add, 200000000},
-    {"sub", llvm_sub, llvm_var_sub, x64_sub, 200000000},
-    {"mul", llvm_mul, llvm_var_mul, x64_mul,  50000000},
+    {"add", llvm_add, llvm_var_add, nullptr,        x64_add, 200000000},
+    {"sub", llvm_sub, llvm_var_sub, nullptr,        x64_sub, 200000000},
+    {"mul", llvm_mul, llvm_var_mul, llvm_argp_mul,  x64_mul,  50000000},
   };
-  printf("unit: ns/op (smaller is faster); var = -var-p (runtime p/ip)\n");
-  printf("%-5s %-12s %10s %10s %10s %9s %9s\n",
-         "op", "mode", "llvm", "var", "x64", "llvm/x64", "var/x64");
+  printf("unit: ns/op (smaller is faster); var = -var-p, argp = -arg-p (4th-arg p)\n");
+  printf("%-5s %-12s %10s %10s %10s %10s %9s %9s %9s\n",
+         "op", "mode", "llvm", "var", "argp", "x64",
+         "llvm/x64", "var/x64", "argp/x64");
   for (const Entry& e : tbl) {
     bool hv = e.var != nullptr;
+    bool ha = e.argp != nullptr;
     // warmup
     bench_latency(e.llvm, e.loop / 10);
     bench_latency(e.x64, e.loop / 10);
     if (hv) bench_latency(e.var, e.loop / 10);
+    if (ha) bench_latency4(e.argp, llvm_var_param, e.loop / 10);
     double ll = bench_latency(e.llvm, e.loop);
     double lx = bench_latency(e.x64, e.loop);
     double lv = hv ? bench_latency(e.var, e.loop) : 0;
+    double la = ha ? bench_latency4(e.argp, llvm_var_param, e.loop) : 0;
     double tl = bench_throughput(e.llvm, e.loop);
     double tx = bench_throughput(e.x64, e.loop);
     double tv = hv ? bench_throughput(e.var, e.loop) : 0;
-    row(e.op, "latency",    ll, lv, lx, hv);
-    row(e.op, "throughput", tl, tv, tx, hv);
+    double ta = ha ? bench_throughput4(e.argp, llvm_var_param, e.loop) : 0;
+    row(e.op, "latency",    ll, lv, la, lx, hv, ha);
+    row(e.op, "throughput", tl, tv, ta, tx, hv, ha);
   }
   return 0;
 }

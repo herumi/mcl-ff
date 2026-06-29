@@ -170,7 +170,7 @@ def gen_mulUnit(name, N, mulPos, extractHigh):
     ret(z)
   return f
 
-def gen_mul(name, mont, dataVar, mulUnit, var_p):
+def gen_mul(name, mont, dataVar, mulUnit, var_p, arg_p=False):
   N = mont.pn
   bit = unit * N
   bu = bit + unit
@@ -179,12 +179,23 @@ def gen_mul(name, mont, dataVar, mulUnit, var_p):
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
-  with Function(name, Void, pz, px, py):
-    pp, ipBase = derivePtr(dataVar, var_p)
-    if var_p:
-      ipval = load(ipBase)
+  args = [pz, px, py]
+  if arg_p:
+    # 4th argument points to struct { uint64_t ip; uint64_t p[N]; }, i.e. the
+    # same [ip, p[N]] layout as -var-p but passed in by the caller instead of
+    # referenced from a fixed global.
+    pParam = IntPtr(unit)
+    args.append(pParam)
+  with Function(name, Void, *args):
+    if arg_p:
+      ipval = load(pParam)
+      pp = getelementptr(pParam, 1)
     else:
-      ipval = mont.ip
+      pp, ipBase = derivePtr(dataVar, var_p)
+      if var_p:
+        ipval = load(ipBase)
+      else:
+        ipval = mont.ip
     if mont.isFullBit:
       for i in range(N):
         y = load(getelementptr(py, i))
@@ -252,6 +263,7 @@ def main():
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
   parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
   parser.add_argument('-var-p', dest='var_p', action='store_true', default=False, help='reference p/ip from a runtime [ip, p[N]] array instead of immediates')
+  parser.add_argument('-arg-p', dest='arg_p', action='store_true', default=False, help='pass a pointer to struct { uint64_t ip; uint64_t p[N]; } as the 4th argument of mul instead of using a global')
 
   opt = parser.parse_args()
   if opt.n == 0:
@@ -296,7 +308,7 @@ def main():
 
   if opt.mul:
     name = f'{opt.pre}mul'
-    gen_mul(name, mont, dataVar, mulUnit, opt.var_p)
+    gen_mul(name, mont, dataVar, mulUnit, opt.var_p, opt.arg_p)
 
   term()
 
