@@ -3,7 +3,7 @@
 # Author : MITSUNARI Shigeo(@herumi)
 # License : modified new BSD license (http://opensource.org/licenses/BSD-3-Clause)
 
-VERSION="0.9.0"
+VERSION="0.9.1"
 
 VOID_TYPE = 0
 INT_TYPE = 1
@@ -323,7 +323,16 @@ def bitcast(x, bit):
   output(f'{r.getName()} = bitcast {x.getFullName()} to {r.getType()}')
   return r
 
+# r = alloca i{bit}, i32 n ; returns i{bit}* pointer to n elements
+def alloca_(bit, n):
+  r = IntPtr(bit)
+  output(f'{r.getName()} = alloca i{bit}, i32 {n}')
+  return r
 
+# emit a named basic-block label, e.g. putLabel('zero') -> 'zero:'
+# (br can target the same name via 'label %zero')
+def putLabel(name):
+  output(f'{name}:')
 
 # op x
 def ret(x):
@@ -443,3 +452,15 @@ def storeN(r, p, offset=0):
   if r.bit > p.bit:
     p = bitcast(p, r.bit)
   store(r, p)
+
+# return [xs[n-1]:...:xs[0]]
+def pack(xs):
+  x = xs[0]
+  for y in xs[1:]:
+    shift = x.bit
+    size = x.bit + y.bit
+    x = zext(x, size)
+    y = zext(y, size)
+    y = shl(y, shift)
+    x = or_(x, y)
+  return x
