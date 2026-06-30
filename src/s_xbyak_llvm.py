@@ -168,6 +168,7 @@ class Operand:
     self.bit = bit
     self.imm = imm
     self.name = name
+    self.const = False
     if t in [INT_TYPE, INT_PTR_TYPE]:
       self.idx = getGlobalIdx()
     if t == STR_VAR_TYPE:
@@ -180,10 +181,12 @@ class Operand:
     if self.t == INT_TYPE or self.t == IMM_TYPE:
       return f'i{self.bit}'
     if self.t == INT_PTR_TYPE:
+      s = f'i{self.bit}*'
       if noalias:
-        return f'i{self.bit}* noalias'
-      else:
-        return f'i{self.bit}*'
+        s += ' noalias'
+      if self.const:
+        s += ' readonly'
+      return s
     if self.t == VOID_TYPE:
       return 'void'
     if self.t == VAR_TYPE:
@@ -201,7 +204,7 @@ class Operand:
       return f'uint{self.bit}_t'
     if self.t == INT_PTR_TYPE:
       s = ''
-      if addConst:
+      if addConst or self.const:
         s += 'const '
       s += f'uint{self.bit}_t*'
       return s
@@ -245,8 +248,9 @@ class Int(Operand):
     self = Operand.__init__(self, INT_TYPE, bit)
 
 class IntPtr(Operand):
-  def __init__(self, bit):
-    self = Operand.__init__(self, INT_PTR_TYPE, bit)
+  def __init__(self, bit, const=False):
+    Operand.__init__(self, INT_PTR_TYPE, bit)
+    self.const = const
 
 def getBitSize(v):
   bit = int(v).bit_length()
