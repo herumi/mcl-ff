@@ -89,6 +89,7 @@ CYBOZU_TEST_AUTO(mul)
 
 CYBOZU_TEST_AUTO(add2)
 {
+	const size_t M = sizeof(Fp) / sizeof(Unit);
 	Fp2 x, y, z;
 	Unit xa[maxN*2], ya[maxN*2], za[maxN*2];
 	cybozu::XorShift rg;
@@ -97,11 +98,12 @@ CYBOZU_TEST_AUTO(add2)
 		x.b.setByCSPRNG(rg);
 		y.a.setByCSPRNG(rg);
 		y.b.setByCSPRNG(rg);
-		bint::copyN(xa, x.getUnit(), N*2);
-		bint::copyN(ya, y.getUnit(), N*2);
+		bint::copyN(xa, x.getUnit(), M*2);
+		bint::copyN(ya, y.getUnit(), M*2);
 		Fp2::add(z, x, y);
 		mcl_fp2_add(za, xa, ya);
-		CYBOZU_TEST_EQUAL_ARRAY(za, z.getUnit(), N*2);
+		CYBOZU_TEST_EQUAL_ARRAY(za, z.getUnit(), N);
+		CYBOZU_TEST_EQUAL_ARRAY(za + M, z.getUnit() + M, N);
 	}
 	CYBOZU_BENCH_C("fp2_add", CC*10, mcl_fp2_add, za, xa, ya);
 	CYBOZU_BENCH_C("Fp2::add", CC*10, Fp2::add, z, x, y);

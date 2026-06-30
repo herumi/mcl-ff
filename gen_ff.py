@@ -107,7 +107,7 @@ def gen_fp_add(name, N, dataVar, var_p):
     storeN(x, pz)
     ret(Void)
 
-def gen_fp2_add(name, N, dataVar, var_p):
+def gen_fp2_add(name, N, dataVar, var_p, offset):
   bit = unit * N
   resetGlobalIdx();
   pz = IntPtr(unit)
@@ -117,10 +117,10 @@ def gen_fp2_add(name, N, dataVar, var_p):
     pp, _ = derivePtr(dataVar, var_p)
     p = loadN(pp, N)
     for i in range(2):
-      x = loadN(px, N, offset=i*N, volatile=True)
-      y = loadN(py, N, offset=i*N, volatile=True)
+      x = loadN(px, N, offset=i*offset, volatile=True)
+      y = loadN(py, N, offset=i*offset, volatile=True)
       x = gen_add_raw(x, y, p, mont.isFullBit)
-      storeN(x, pz, offset=i*N)
+      storeN(x, pz, offset=i*offset)
 
     ret(Void)
 
@@ -272,6 +272,7 @@ def main():
   parser.add_argument('-n', type=int, default=0, help='max size of unit')
   parser.add_argument('-p', type=str, default='', help='characteristic of a finite field')
   parser.add_argument('-type', type=str, default='BLS12-381-p', help='elliptic curve type')
+  parser.add_argument('-offset', type=int, default=6, help='sizeof(Fp)/sizeof(Uuit)')
   parser.add_argument('-proto', action='store_true', default=False, help='show prototype')
   parser.add_argument('-pre', type=str, default='mcl_fp_', help='prefix of a Fp function name')
   parser.add_argument('-pre2', type=str, default='mcl_fp2_', help='prefix of a Fp2 function name')
@@ -312,7 +313,7 @@ def main():
 
   if opt.add:
     gen_fp_add(f'{opt.pre}add', mont.pn, dataVar, opt.var_p)
-    gen_fp2_add(f'{opt.pre2}add', mont.pn, dataVar, opt.var_p)
+    gen_fp2_add(f'{opt.pre2}add', mont.pn, dataVar, opt.var_p, opt.offset)
   if opt.sub:
     gen_fp_sub(f'{opt.pre}sub', mont.pn, dataVar, opt.var_p)
 
