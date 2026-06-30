@@ -50,7 +50,7 @@ static const uint64_t Y[N] = {0x111, 0x222, 0x333, 0x444, 0x555, 0x666};
 
 // latency: serial dependency chain repeating z = f(z, Y)
 static double bench_latency(FpOp f, long loop) {
-	alignas(64) uint64_t z[N] = {1, 2, 3, 4, 5, 6};
+	alignas(64) uint64_t z[N*2] = {1, 2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 16};
 	auto t0 = std::chrono::steady_clock::now();
 	for (long i = 0; i < loop; i++) {
 		f(z, z, Y);
@@ -62,9 +62,9 @@ static double bench_latency(FpOp f, long loop) {
 
 // throughput: break the dependency with 4 independent accumulators
 static double bench_throughput(FpOp f, long loop) {
-	alignas(64) uint64_t a[4][N];
+	alignas(64) uint64_t a[4][N*2];
 	for (int k = 0; k < 4; k++)
-		for (int j = 0; j < N; j++) a[k][j] = j + k + 1;
+		for (int j = 0; j < N*2; j++) a[k][j] = j + k + 1;
 	long m = loop / 4;
 	auto t0 = std::chrono::steady_clock::now();
 	for (long i = 0; i < m; i++) {
@@ -80,7 +80,7 @@ static double bench_throughput(FpOp f, long loop) {
 
 // 4-argument variants for the -arg-p mul (prime context as the 4th argument).
 static double bench_latency4(FpOp4 f, const uint64_t* prm, long loop) {
-	alignas(64) uint64_t z[N] = {1, 2, 3, 4, 5, 6};
+	alignas(64) uint64_t z[N*2] = {1, 2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 16};
 	auto t0 = std::chrono::steady_clock::now();
 	for (long i = 0; i < loop; i++) {
 		f(z, z, Y, prm);
@@ -91,9 +91,9 @@ static double bench_latency4(FpOp4 f, const uint64_t* prm, long loop) {
 }
 
 static double bench_throughput4(FpOp4 f, const uint64_t* prm, long loop) {
-	alignas(64) uint64_t a[4][N];
+	alignas(64) uint64_t a[4][N*2];
 	for (int k = 0; k < 4; k++)
-		for (int j = 0; j < N; j++) a[k][j] = j + k + 1;
+		for (int j = 0; j < N*2; j++) a[k][j] = j + k + 1;
 	long m = loop / 4;
 	auto t0 = std::chrono::steady_clock::now();
 	for (long i = 0; i < m; i++) {
@@ -143,8 +143,13 @@ int main() {
 	Fp::init(pStr, 1, 1);
 	bool b;
 	Fp2::init(&b);
+	if (!b) {
+		fprintf(stderr, "Fp2::init error\n");
+		return 1;
+	}
 	const Entry tbl[] = {
 		{"add", llvm_add, llvm_var_add, nullptr, x64_add, 200000000},
+		{"add2", llvm2_add, llvm_var2_add, nullptr, Fp::getOp().fp2_addA_/*Fp2::add*/, 200000000},
 		{"sub", llvm_sub, llvm_var_sub, nullptr, x64_sub, 200000000},
 		{"mul", llvm_mul, llvm_var_mul, llvm_argp_mul, x64_mul, 50000000},
 	};

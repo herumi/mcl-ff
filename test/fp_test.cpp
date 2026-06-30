@@ -100,7 +100,8 @@ CYBOZU_TEST_AUTO(add2)
 		y.b.setByCSPRNG(rg);
 		bint::copyN(xa, x.getUnit(), M*2);
 		bint::copyN(ya, y.getUnit(), M*2);
-		Fp2::add(z, x, y);
+//		Fp2::add(z, x, y);
+		Fp::getOp().fp2_addA_((Unit*)z.getUnit(), x.getUnit(), y.getUnit());
 		mcl_fp2_add(za, xa, ya);
 		CYBOZU_TEST_EQUAL_ARRAY(za, z.getUnit(), N);
 		CYBOZU_TEST_EQUAL_ARRAY(za + M, z.getUnit() + M, N);
