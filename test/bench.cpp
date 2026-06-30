@@ -40,6 +40,7 @@ extern "C" {
 	// struct { uint64_t ip; uint64_t p[N]; } expected by llvm_argp_mul.
 	extern const uint64_t llvm_var_param[];
 	void x64_add(uint64_t*, const uint64_t*, const uint64_t*);
+	void x642_add(uint64_t*, const uint64_t*, const uint64_t*);
 	void x64_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void x64_mul(uint64_t*, const uint64_t*, const uint64_t*);
 }
@@ -147,9 +148,24 @@ int main() {
 		fprintf(stderr, "Fp2::init error\n");
 		return 1;
 	}
+	// verify x642_add against mcl Fp2::add on random reduced inputs
+	for (int i = 0; i < 10000; i++) {
+		Fp2 x, y, z1, z2;
+		x.a.setByCSPRNG(); x.b.setByCSPRNG();
+		y.a.setByCSPRNG(); y.b.setByCSPRNG();
+		Fp2::add(z1, x, y);
+		x642_add((uint64_t*)&z2, (const uint64_t*)&x, (const uint64_t*)&y);
+		if (z1 != z2) {
+			fprintf(stderr, "x642_add mismatch at i=%d\n", i);
+			return 1;
+		}
+	}
 	const Entry tbl[] = {
 		{"add", llvm_add, llvm_var_add, nullptr, x64_add, 200000000},
 		{"add2", llvm2_add, llvm_var2_add, nullptr, Fp::getOp().fp2_addA_/*Fp2::add*/, 200000000},
+		// add2x: "llvm" column is gen_ff_x64's x642_add, "x64" column is mcl's
+		// Fp2::add, so the llvm/x64 ratio is (our x64) / mcl.
+		{"add2x", x642_add, nullptr, nullptr, Fp::getOp().fp2_addA_/*Fp2::add*/, 200000000},
 		{"sub", llvm_sub, llvm_var_sub, nullptr, x64_sub, 200000000},
 		{"mul", llvm_mul, llvm_var_mul, llvm_argp_mul, x64_mul, 50000000},
 	};

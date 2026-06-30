@@ -109,6 +109,40 @@ def gen_add(name, mont):
         cmovc(t2[i], t1[i])
         mov(ptr(pz + i * 8), t2[i])
 
+# Fp2 add: two independent Fp adds on the [a, b] components, b at byte
+# offset*8 from a. Mirrors mcl's gen_fp2_add (gen_raw_fp_add twice).
+# p is read from rip memory (no immediate materialize) so the conditional
+# subtract is sbb+cmovc and we fit 2*N limbs (t1, t2) in 11 temps + rax,
+# keeping px/py live across both halves.
+def gen_fp2_add(name, mont, offset):
+  N = mont.pn
+  align(16)
+  with FuncProc(name):
+    assert not mont.isFullBit
+    assert N*2 <= 12  # 11 temps + rax
+    with StackFrame(3, 11) as sf:
+      pz = sf.p[0]
+      px = sf.p[1]
+      py = sf.p[2]
+      t = sf.t[:]
+      t.append(rax)
+      t1 = t[0:N]
+      t2 = t[N:N*2]
+      for half in range(2):
+        off = half * offset * 8
+        # t1 = x + y
+        for i in range(N):
+          mov(t1[i], ptr(px + off + i * 8))
+          add_ex(t1[i], ptr(py + off + i * 8), i == 0)
+        # t2 = t1 - p (CF set if t1 < p)
+        for i in range(N):
+          mov(t2[i], t1[i])
+          sub_ex(t2[i], ptr(rip + 'p' + i * 8), i == 0)
+        # keep t1 (= x+y) if it underflowed, else use t2 (= x+y-p)
+        for i in range(N):
+          cmovc(t2[i], t1[i])
+          mov(ptr(pz + off + i * 8), t2[i])
+
 def gen_sub(name, mont):
   N = mont.pn
   align(16)
@@ -218,6 +252,7 @@ def main():
   parser.add_argument('-p', type=str, default='', help='characteristic of a finite field')
   parser.add_argument('-type', type=str, default='BLS12-381-p', help='elliptic curve type')
   parser.add_argument('-pre', type=str, default='mcl_fp_', help='prefix of a function name')
+  parser.add_argument('-offset', type=int, default=6, help='sizeof(Fp)/sizeof(Unit)')
   parser.add_argument('-add', action='store_true', default=False, help='add add function')
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
   parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
@@ -240,9 +275,11 @@ def main():
   makeVar('vmask', 64, (1<<52)-1, const=True, static=True)
   segment('text')
 
+  pre2 = opt.pre[:-1] + '2_'
   if opt.add:
     name = f'{opt.pre}add'
     gen_add(name, mont)
+    gen_fp2_add(f'{pre2}add', mont, opt.offset)
   if opt.sub:
     name = f'{opt.pre}sub'
     gen_sub(name, mont)
