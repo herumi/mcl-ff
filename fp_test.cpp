@@ -4,6 +4,7 @@
 #include <cybozu/benchmark.hpp>
 #include <mcl_fp.h>
 #include <mcl/fp_def.hpp>
+#include <mcl/fp_tower.hpp>
 
 using namespace mcl;
 using namespace mcl::fp;
@@ -19,7 +20,10 @@ CYBOZU_TEST_AUTO(init)
 {
 	const char *pStr = (const char*)mcl_fp_get_prime();
 	printf("p=%s\n", pStr);
-	Fp::init(pStr);
+	Fp::init(pStr, 1, 1);
+	bool b;
+	Fp2::init(&b);
+	CYBOZU_TEST_ASSERT(b);
 	N = Fp::getOp().N;
 }
 
@@ -81,4 +85,24 @@ CYBOZU_TEST_AUTO(mul)
 #endif
 	}
 	CYBOZU_BENCH_C("fp_mul", CC, mcl_fp_mul, za, xa, ya);
+}
+
+CYBOZU_TEST_AUTO(add2)
+{
+	Fp2 x, y, z;
+	Unit xa[maxN*2], ya[maxN*2], za[maxN*2];
+	cybozu::XorShift rg;
+	for (int i = 0; i < C; i++) {
+		x.a.setByCSPRNG(rg);
+		x.b.setByCSPRNG(rg);
+		y.a.setByCSPRNG(rg);
+		y.b.setByCSPRNG(rg);
+		bint::copyN(xa, x.getUnit(), N*2);
+		bint::copyN(ya, y.getUnit(), N*2);
+		Fp2::add(z, x, y);
+		mcl_fp2_add(za, xa, ya);
+		CYBOZU_TEST_EQUAL_ARRAY(za, z.getUnit(), N*2);
+	}
+	CYBOZU_BENCH_C("fp2_add", CC*10, mcl_fp2_add, za, xa, ya);
+	CYBOZU_BENCH_C("Fp2::add", CC*10, Fp2::add, z, x, y);
 }

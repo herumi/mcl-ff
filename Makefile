@@ -23,7 +23,7 @@ DEPEND_FILE=$(TEST_SRC:.cpp=.d)
 
 TARGET=$(LL) $(HEADER) $(TEST_EXE)
 
-CFLAGS=-Wall -Wextra -I ./ -I $(MCL_DIR)/include -fPIC
+CFLAGS=-Wall -Wextra -I ./ -I $(MCL_DIR)/include -fPIC -g
 LDFLAGS=$(MCL_FF_OBJ) -lmcl -L $(MCL_DIR)/lib
 
 ifeq ($(ARCH),x86_64)

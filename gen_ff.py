@@ -13,8 +13,7 @@ def gen_add(N):
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
-  name = f'mcl_fp_addPre{N}'
-  with Function(name, Void, pz, px, py):
+  with Function(f'mcl_fp_addPre{N}', Void, pz, px, py):
     x = zext(loadN(px, N), bit + unit)
     y = zext(loadN(py, N), bit + unit)
     z = add(x, y)
@@ -27,8 +26,7 @@ def gen_mulUU():
   z = Int(unit2)
   x = Int(unit)
   y = Int(unit)
-  name = f'mul{unit}x{unit}L'
-  with Function(name, z, x, y, private=True) as f:
+  with Function(f'mul{unit}x{unit}L', z, x, y, private=True) as f:
     x = zext(x, unit2)
     y = zext(y, unit2)
     z = mul(x, y)
@@ -39,8 +37,7 @@ def gen_extractHigh():
   resetGlobalIdx()
   z = Int(unit)
   x = Int(unit2)
-  name = f'extractHigh{unit}'
-  with Function(name, z, x, private=True) as f:
+  with Function(f'extractHigh{unit}', z, x, private=True) as f:
     x = lshr(x, unit)
     z = trunc(x, unit)
     ret(z)
@@ -52,8 +49,7 @@ def gen_mulPos(mulUU):
   px = IntPtr(unit)
   y = Int(unit)
   i = Int(unit)
-  name = f'mulPos{unit}x{unit}'
-  with Function(name, xy, px, y, i, private=True) as f:
+  with Function(f'mulPos{unit}x{unit}', xy, px, y, i, private=True) as f:
     x = load(getelementptr(px, i))
     xy = call(mulUU, x, y)
     ret(xy)
@@ -76,6 +72,24 @@ def derivePtr(dataVar, var_p):
   pp = bitcast(dataVar, unit)
   return pp, None
 
+def gen_add_raw(x, y, p, isFullBit):
+  bit = x.bit
+  if isFullBit:
+    x = zext(x, bit + unit)
+    y = zext(y, bit + unit)
+    x = add(x, y)
+    p = zext(p, bit + unit)
+    y = sub(x, p)
+    c = trunc(lshr(y, bit), 1)
+    x = select(c, x, y)
+    x = trunc(x, bit)
+  else:
+    x = add(x, y)
+    y = sub(x, p)
+    c = trunc(lshr(y, bit - 1), 1)
+    x = select(c, x, y)
+  return x
+
 def gen_fp_add(name, N, dataVar, var_p):
   bit = unit * N
   resetGlobalIdx();
@@ -88,24 +102,26 @@ def gen_fp_add(name, N, dataVar, var_p):
     # (common in dependency chains) do not pay the folded-load latency.
     x = loadN(px, N, volatile=True)
     y = loadN(py, N, volatile=True)
-    if mont.isFullBit:
-      x = zext(x, bit + unit)
-      y = zext(y, bit + unit)
-      x = add(x, y)
-      p = loadN(pp, N)
-      p = zext(p, bit + unit)
-      y = sub(x, p)
-      c = trunc(lshr(y, bit), 1)
-      x = select(c, x, y)
-      x = trunc(x, bit)
-      storeN(x, pz)
-    else:
-      x = add(x, y)
-      p = loadN(pp, N)
-      y = sub(x, p)
-      c = trunc(lshr(y, bit - 1), 1)
-      x = select(c, x, y)
-      storeN(x, pz)
+    p = loadN(pp, N)
+    x = gen_add_raw(x, y, p, mont.isFullBit)
+    storeN(x, pz)
+    ret(Void)
+
+def gen_fp2_add(name, N, dataVar, var_p):
+  bit = unit * N
+  resetGlobalIdx();
+  pz = IntPtr(unit)
+  px = IntPtr(unit)
+  py = IntPtr(unit)
+  with Function(name, Void, pz, px, py):
+    pp, _ = derivePtr(dataVar, var_p)
+    p = loadN(pp, N)
+    for i in range(2):
+      x = loadN(px, N, offset=i*N, volatile=True)
+      y = loadN(py, N, offset=i*N, volatile=True)
+      x = gen_add_raw(x, y, p, mont.isFullBit)
+      storeN(x, pz, offset=i*N)
+
     ret(Void)
 
 def gen_fp_sub(name, N, dataVar, var_p):
@@ -257,7 +273,8 @@ def main():
   parser.add_argument('-p', type=str, default='', help='characteristic of a finite field')
   parser.add_argument('-type', type=str, default='BLS12-381-p', help='elliptic curve type')
   parser.add_argument('-proto', action='store_true', default=False, help='show prototype')
-  parser.add_argument('-pre', type=str, default='mcl_fp_', help='prefix of a function name')
+  parser.add_argument('-pre', type=str, default='mcl_fp_', help='prefix of a Fp function name')
+  parser.add_argument('-pre2', type=str, default='mcl_fp2_', help='prefix of a Fp2 function name')
   parser.add_argument('-addn', type=int, default=0, help='mad size of add/sub')
   parser.add_argument('-add', action='store_true', default=False, help='add add function')
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
@@ -294,21 +311,18 @@ def main():
   gen_get_prime(f'{opt.pre}get_prime', pStr)
 
   if opt.add:
-    name = f'{opt.pre}add'
-    gen_fp_add(name, mont.pn, dataVar, opt.var_p)
+    gen_fp_add(f'{opt.pre}add', mont.pn, dataVar, opt.var_p)
+    gen_fp2_add(f'{opt.pre2}add', mont.pn, dataVar, opt.var_p)
   if opt.sub:
-    name = f'{opt.pre}sub'
-    gen_fp_sub(name, mont.pn, dataVar, opt.var_p)
+    gen_fp_sub(f'{opt.pre}sub', mont.pn, dataVar, opt.var_p)
 
   mulUU = gen_mulUU()
   extractHigh = gen_extractHigh()
   mulPos = gen_mulPos(mulUU)
-  name = f'{opt.pre}mulUnit'
-  mulUnit = gen_mulUnit(name, mont.pn, mulPos, extractHigh)
+  mulUnit = gen_mulUnit(f'{opt.pre}mulUnit', mont.pn, mulPos, extractHigh)
 
   if opt.mul:
-    name = f'{opt.pre}mul'
-    gen_mul(name, mont, dataVar, mulUnit, opt.var_p, opt.arg_p)
+    gen_mul(f'{opt.pre}mul', mont, dataVar, mulUnit, opt.var_p, opt.arg_p)
 
   term()
 
