@@ -262,7 +262,7 @@ def gen_mul(name, mont, dataVar, mulUnit, var_p, arg_p=False):
 
 def gen_get_prime(name, pStr):
   resetGlobalIdx()
-  r = IntPtr(8)
+  r = IntPtr(8, const=True)
   with Function(name, r):
     ret(bitcast(pStr, 8))
 

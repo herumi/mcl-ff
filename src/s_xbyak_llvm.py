@@ -118,7 +118,7 @@ class Function:
     for i in range(len(args)):
       if i > 0:
         s += ', '
-      s += args[i].getFullName(noalias)
+      s += args[i].getFullName(noalias, isArg=True)
     s += ')'
     output(s)
     output('{')
@@ -174,17 +174,20 @@ class Operand:
     if t == STR_VAR_TYPE:
       self.bit = len(self.imm) + 1
 
-  def getFullName(self, noalias=False):
-    return f'{self.getType(noalias)} {self.getName()}'.strip()
+  def getFullName(self, noalias=False, isArg=False):
+    return f'{self.getType(noalias, isArg)} {self.getName()}'.strip()
 
-  def getType(self, noalias=False):
+  # noalias/readonly are parameter attributes, so they are emitted only when
+  # the operand is rendered as a function argument (isArg=True). LLVM-IR has no
+  # readonly return-value attribute, so a const pointer return type drops it.
+  def getType(self, noalias=False, isArg=False):
     if self.t == INT_TYPE or self.t == IMM_TYPE:
       return f'i{self.bit}'
     if self.t == INT_PTR_TYPE:
       s = f'i{self.bit}*'
       if noalias:
         s += ' noalias'
-      if self.const:
+      if isArg and self.const:
         s += ' readonly'
       return s
     if self.t == VOID_TYPE:
