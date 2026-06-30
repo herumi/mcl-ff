@@ -275,7 +275,6 @@ def main():
   parser.add_argument('-offset', type=int, default=6, help='sizeof(Fp)/sizeof(Uuit)')
   parser.add_argument('-proto', action='store_true', default=False, help='show prototype')
   parser.add_argument('-pre', type=str, default='mcl_fp_', help='prefix of a Fp function name')
-  parser.add_argument('-pre2', type=str, default='mcl_fp2_', help='prefix of a Fp2 function name')
   parser.add_argument('-addn', type=int, default=0, help='mad size of add/sub')
   parser.add_argument('-add', action='store_true', default=False, help='add add function')
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
@@ -289,6 +288,7 @@ def main():
     opt.addn = 16 if opt.u == 64 else 32
   if opt.p == '':
     opt.p = primeTbl[opt.type]
+  opt.pre2 = opt.pre[:-1] + '2_'
 
   global mont, unit, unit2
   mont = Montgomery(opt.p, opt.u)
