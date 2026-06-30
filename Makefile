@@ -83,7 +83,7 @@ src/bench_llvm.ll: src/gen_ff.py
 src/bench_llvm_var.ll: src/gen_ff.py
 	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_var_ -add -sub -mul -var-p > $@
 src/bench_llvm_argp.ll: src/gen_ff.py
-	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_argp_ -mul -arg-p > $@
+	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_argp_ -add -sub -mul -arg-p > $@
 src/bench_x64.S: src/gen_ff_x64.py
 	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul > $@
 obj/bench_llvm.o: src/bench_llvm.ll

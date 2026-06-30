@@ -90,14 +90,22 @@ def gen_add_raw(x, y, p, isFullBit):
     x = select(c, x, y)
   return x
 
-def gen_fp_add(name, N, dataVar, var_p):
+def gen_fp_add(name, N, dataVar, var_p, arg_p=False):
   bit = unit * N
   resetGlobalIdx();
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
-  with Function(name, Void, pz, px, py):
-    pp, _ = derivePtr(dataVar, var_p)
+  args = [pz, px, py]
+  if arg_p:
+    pParam = IntPtr(unit)
+    args.append(pParam)
+  with Function(name, Void, *args):
+    if arg_p:
+      # 4th argument is a pointer to { ip, p[N] }; add only needs p (element 1).
+      pp = getelementptr(pParam, 1)
+    else:
+      pp, _ = derivePtr(dataVar, var_p)
     # volatile: keep the operand loads unfused so store-forwarded inputs
     # (common in dependency chains) do not pay the folded-load latency.
     x = loadN(px, N, volatile=True)
@@ -107,14 +115,22 @@ def gen_fp_add(name, N, dataVar, var_p):
     storeN(x, pz)
     ret(Void)
 
-def gen_fp2_add(name, N, dataVar, var_p, offset):
+def gen_fp2_add(name, N, dataVar, var_p, offset, arg_p=False):
   bit = unit * N
   resetGlobalIdx();
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
-  with Function(name, Void, pz, px, py):
-    pp, _ = derivePtr(dataVar, var_p)
+  args = [pz, px, py]
+  if arg_p:
+    pParam = IntPtr(unit)
+    args.append(pParam)
+  with Function(name, Void, *args):
+    if arg_p:
+      # 4th argument is a pointer to { ip, p[N] }; add only needs p (element 1).
+      pp = getelementptr(pParam, 1)
+    else:
+      pp, _ = derivePtr(dataVar, var_p)
     p = loadN(pp, N)
     for i in range(2):
       x = loadN(px, N, offset=i*offset, volatile=True)
@@ -124,14 +140,22 @@ def gen_fp2_add(name, N, dataVar, var_p, offset):
 
     ret(Void)
 
-def gen_fp_sub(name, N, dataVar, var_p):
+def gen_fp_sub(name, N, dataVar, var_p, arg_p=False):
   bit = unit * N
   resetGlobalIdx();
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
-  with Function(name, Void, pz, px, py):
-    pp, _ = derivePtr(dataVar, var_p)
+  args = [pz, px, py]
+  if arg_p:
+    pParam = IntPtr(unit)
+    args.append(pParam)
+  with Function(name, Void, *args):
+    if arg_p:
+      # 4th argument is a pointer to { ip, p[N] }; sub only needs p (element 1).
+      pp = getelementptr(pParam, 1)
+    else:
+      pp, _ = derivePtr(dataVar, var_p)
     x = loadN(px, N, volatile=True)
     y = loadN(py, N, volatile=True)
     if mont.isFullBit:
@@ -280,7 +304,7 @@ def main():
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
   parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
   parser.add_argument('-var-p', dest='var_p', action='store_true', default=False, help='reference p/ip from a runtime [ip, p[N]] array instead of immediates')
-  parser.add_argument('-arg-p', dest='arg_p', action='store_true', default=False, help='pass a pointer to struct { uint64_t ip; uint64_t p[N]; } as the 4th argument of mul instead of using a global')
+  parser.add_argument('-arg-p', dest='arg_p', action='store_true', default=False, help='pass a pointer to struct { uint64_t ip; uint64_t p[N]; } as the 4th argument of add/sub/mul instead of using a global')
 
   opt = parser.parse_args()
   if opt.n == 0:
@@ -312,10 +336,10 @@ def main():
   gen_get_prime(f'{opt.pre}get_prime', pStr)
 
   if opt.add:
-    gen_fp_add(f'{opt.pre}add', mont.pn, dataVar, opt.var_p)
-    gen_fp2_add(f'{opt.pre2}add', mont.pn, dataVar, opt.var_p, opt.offset)
+    gen_fp_add(f'{opt.pre}add', mont.pn, dataVar, opt.var_p, opt.arg_p)
+    gen_fp2_add(f'{opt.pre2}add', mont.pn, dataVar, opt.var_p, opt.offset, opt.arg_p)
   if opt.sub:
-    gen_fp_sub(f'{opt.pre}sub', mont.pn, dataVar, opt.var_p)
+    gen_fp_sub(f'{opt.pre}sub', mont.pn, dataVar, opt.var_p, opt.arg_p)
 
   mulUU = gen_mulUU()
   extractHigh = gen_extractHigh()

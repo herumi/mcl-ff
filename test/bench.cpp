@@ -10,10 +10,13 @@
 // Built and run via the `bench` target in the Makefile.
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <cstdlib>
 #include <chrono>
 #include <mcl_fp.h>
 #include <mcl/fp_def.hpp>
 #include <mcl/fp_tower.hpp>
+#include <cybozu/xorshift.hpp>
 
 using namespace mcl;
 using namespace mcl::fp;
@@ -21,7 +24,7 @@ using namespace mcl::fp;
 static const int N = 6; // BLS12-381: 6 limbs (64bit)
 
 typedef void (*FpOp)(uint64_t* z, const uint64_t* x, const uint64_t* y);
-// mul with the prime context passed as the 4th argument.
+// add/sub/mul with the prime context passed as the 4th argument.
 typedef void (*FpOp4)(uint64_t* z, const uint64_t* x, const uint64_t* y,
 											const uint64_t* p);
 
@@ -35,6 +38,9 @@ extern "C" {
 	void llvm_var2_add(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_var_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_var_mul(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_argp_add(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_argp2_add(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_argp_sub(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_argp_mul(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
 	// [ip, p[N]] array emitted by the -var-p generator; same layout as the
 	// struct { uint64_t ip; uint64_t p[N]; } expected by llvm_argp_mul.
@@ -46,8 +52,11 @@ extern "C" {
 }
 
 // A constant below p. For add/sub/mul the result stays below p, so chaining
-// does not diverge.
-static const uint64_t Y[N] = {0x111, 0x222, 0x333, 0x444, 0x555, 0x666};
+// does not diverge. Sized N*2 so the Fp2 ops can read a second component.
+static const uint64_t Y[N*2] = {
+	0x111, 0x222, 0x333, 0x444, 0x555, 0x666,
+	0x777, 0x888, 0x999, 0xaaa, 0xbbb, 0xccc,
+};
 
 // latency: serial dependency chain repeating z = f(z, Y)
 static double bench_latency(FpOp f, long loop) {
@@ -149,10 +158,11 @@ int main() {
 		return 1;
 	}
 	// verify x642_add against mcl Fp2::add on random reduced inputs
+	cybozu::XorShift rg;
 	for (int i = 0; i < 10000; i++) {
 		Fp2 x, y, z1, z2;
-		x.a.setByCSPRNG(); x.b.setByCSPRNG();
-		y.a.setByCSPRNG(); y.b.setByCSPRNG();
+		x.a.setByCSPRNG(rg); x.b.setByCSPRNG(rg);
+		y.a.setByCSPRNG(rg); y.b.setByCSPRNG(rg);
 		Fp2::add(z1, x, y);
 		x642_add((uint64_t*)&z2, (const uint64_t*)&x, (const uint64_t*)&y);
 		if (z1 != z2) {
@@ -160,13 +170,42 @@ int main() {
 			return 1;
 		}
 	}
+	{
+		const int vn = (int)Fp::getOp().N;
+		printf("vn=%d\n", vn);
+		Fp x[2], y[2];
+		for (int i = 0; i < 2; i++) {
+			x[i].setByCSPRNG(rg);
+			y[i].setByCSPRNG(rg);
+		}
+		const Unit *px = (const Unit *)x;
+		const Unit *py = (const Unit *)y;
+
+		auto chk3 = [&](FpOp f0, FpOp fv, FpOp4 fa, const char* nm, int comps) {
+			Fp r0[2];
+			Fp rv[2];
+			Fp ra[2];
+			f0((Unit*)r0, px, py);
+			fv((Unit*)rv, px, py);
+			fa((Unit*)ra, px, py, llvm_var_param);
+			for (int i = 0; i < comps; i++) {
+				if (r0[i] != rv[i] || r0[i] != ra[i]) {
+					fprintf(stderr, "%s var/argp variant mismatch\n", nm);
+					exit(1);
+				}
+			}
+		};
+		chk3(llvm_add, llvm_var_add, llvm_argp_add, "add", 1);
+		chk3(llvm_sub, llvm_var_sub, llvm_argp_sub, "sub", 1);
+		chk3(llvm2_add, llvm_var2_add, llvm_argp2_add, "add2", 2);
+	}
 	const Entry tbl[] = {
-		{"add", llvm_add, llvm_var_add, nullptr, x64_add, 200000000},
-		{"add2", llvm2_add, llvm_var2_add, nullptr, Fp::getOp().fp2_addA_/*Fp2::add*/, 200000000},
+		{"add", llvm_add, llvm_var_add, llvm_argp_add, x64_add, 200000000},
+		{"add2", llvm2_add, llvm_var2_add, llvm_argp2_add, Fp::getOp().fp2_addA_/*Fp2::add*/, 200000000},
 		// add2x: "llvm" column is gen_ff_x64's x642_add, "x64" column is mcl's
 		// Fp2::add, so the llvm/x64 ratio is (our x64) / mcl.
 		{"add2x", x642_add, nullptr, nullptr, Fp::getOp().fp2_addA_/*Fp2::add*/, 200000000},
-		{"sub", llvm_sub, llvm_var_sub, nullptr, x64_sub, 200000000},
+		{"sub", llvm_sub, llvm_var_sub, llvm_argp_sub, x64_sub, 200000000},
 		{"mul", llvm_mul, llvm_var_mul, llvm_argp_mul, x64_mul, 50000000},
 	};
 	printf("unit: ns/op (smaller is faster); var = -var-p, argp = -arg-p (4th-arg p)\n");
