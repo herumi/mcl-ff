@@ -33,14 +33,17 @@ extern "C" {
 	void llvm_add(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm2_add(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_sub(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm2_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_mul(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_var_add(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_var2_add(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_var_sub(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_var2_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_var_mul(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_argp_add(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_argp2_add(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_argp_sub(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_argp2_sub(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_argp_mul(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
 	// [ip, p[N]] array emitted by the -var-p generator; same layout as the
 	// struct { uint64_t ip; uint64_t p[N]; } expected by llvm_argp_mul.
@@ -48,6 +51,7 @@ extern "C" {
 	void x64_add(uint64_t*, const uint64_t*, const uint64_t*);
 	void x642_add(uint64_t*, const uint64_t*, const uint64_t*);
 	void x64_sub(uint64_t*, const uint64_t*, const uint64_t*);
+	void x642_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void x64_mul(uint64_t*, const uint64_t*, const uint64_t*);
 }
 
@@ -157,7 +161,7 @@ int main() {
 		fprintf(stderr, "Fp2::init error\n");
 		return 1;
 	}
-	// verify x642_add against mcl Fp2::add on random reduced inputs
+	// verify x642_add/x642_sub against mcl Fp2::add/sub on random reduced inputs
 	cybozu::XorShift rg;
 	for (int i = 0; i < 10000; i++) {
 		Fp2 x, y, z1, z2;
@@ -167,6 +171,12 @@ int main() {
 		x642_add((uint64_t*)&z2, (const uint64_t*)&x, (const uint64_t*)&y);
 		if (z1 != z2) {
 			fprintf(stderr, "x642_add mismatch at i=%d\n", i);
+			return 1;
+		}
+		Fp2::sub(z1, x, y);
+		x642_sub((uint64_t*)&z2, (const uint64_t*)&x, (const uint64_t*)&y);
+		if (z1 != z2) {
+			fprintf(stderr, "x642_sub mismatch at i=%d\n", i);
 			return 1;
 		}
 	}
@@ -198,6 +208,7 @@ int main() {
 		chk3(llvm_add, llvm_var_add, llvm_argp_add, "add", 1);
 		chk3(llvm_sub, llvm_var_sub, llvm_argp_sub, "sub", 1);
 		chk3(llvm2_add, llvm_var2_add, llvm_argp2_add, "add2", 2);
+		chk3(llvm2_sub, llvm_var2_sub, llvm_argp2_sub, "sub2", 2);
 	}
 	const Entry tbl[] = {
 		{"add", llvm_add, llvm_var_add, llvm_argp_add, x64_add, 200000000},
@@ -206,6 +217,10 @@ int main() {
 		// Fp2::add, so the llvm/x64 ratio is (our x64) / mcl.
 		{"add2x", x642_add, nullptr, nullptr, Fp::getOp().fp2_addA_/*Fp2::add*/, 200000000},
 		{"sub", llvm_sub, llvm_var_sub, llvm_argp_sub, x64_sub, 200000000},
+		{"sub2", llvm2_sub, llvm_var2_sub, llvm_argp2_sub, Fp::getOp().fp2_subA_/*Fp2::sub*/, 200000000},
+		// sub2x: "llvm" column is gen_ff_x64's x642_sub, "x64" column is mcl's
+		// Fp2::sub, so the llvm/x64 ratio is (our x64) / mcl.
+		{"sub2x", x642_sub, nullptr, nullptr, Fp::getOp().fp2_subA_/*Fp2::sub*/, 200000000},
 		{"mul", llvm_mul, llvm_var_mul, llvm_argp_mul, x64_mul, 50000000},
 	};
 	printf("unit: ns/op (smaller is faster); var = -var-p, argp = -arg-p (4th-arg p)\n");

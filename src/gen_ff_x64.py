@@ -143,6 +143,39 @@ def gen_fp2_add(name, mont, offset):
           cmovc(t2[i], t1[i])
           mov(ptr(pz + off + i * 8), t2[i])
 
+# Fp2 sub: two independent Fp subs on the [a, b] components, b at byte
+# offset*8 from a. Mirrors mcl's gen_raw_fp_sub (fp_generator.hpp) pointer-cmov
+# trick, which is lighter on uops (better throughput) than a 2*N-register
+# select: t = x - y, then cmovc picks &p or &zero into rax by the borrow, and
+# t += *rax folds the conditional +p as a memory add. Uses only N+1 temps + rax,
+# so both halves reuse the same registers. Correct for full-bit p too (t + p is
+# taken mod 2^(64N)).
+def gen_fp2_sub(name, mont, offset):
+  N = mont.pn
+  align(16)
+  with FuncProc(name):
+    with StackFrame(3, N+1) as sf:
+      pz = sf.p[0]
+      px = sf.p[1]
+      py = sf.p[2]
+      t = sf.t[0:N]
+      pp = sf.t[N]
+      for half in range(2):
+        off = half * offset * 8
+        # t = x - y (CF set if x < y)
+        for i in range(N):
+          mov(t[i], ptr(px + off + i * 8))
+          sub_ex(t[i], ptr(py + off + i * 8), i == 0)
+        # rax = borrow ? &p : &zero  (lea/cmovc do not disturb the borrow flag)
+        lea(rax, ptr(rip + 'zero'))
+        lea(pp, ptr(rip + 'p'))
+        cmovc(rax, pp)
+        # t += *rax (= x-y when x >= y, else x-y+p) and store
+        for i in range(N):
+          add_ex(t[i], ptr(rax + i * 8), i == 0)
+        for i in range(N):
+          mov(ptr(pz + off + i * 8), t[i])
+
 def gen_sub(name, mont):
   N = mont.pn
   align(16)
@@ -283,6 +316,7 @@ def main():
   if opt.sub:
     name = f'{opt.pre}sub'
     gen_sub(name, mont)
+    gen_fp2_sub(f'{pre2}sub', mont, opt.offset)
   if opt.mul and not mont.isFullBit:
     name = f'{opt.pre}mul'
     gen_mul(name, mont)

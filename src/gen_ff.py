@@ -140,6 +140,22 @@ def gen_fp2_add(name, N, dataVar, var_p, offset, arg_p=False):
 
     ret(Void)
 
+def gen_sub_raw(x, y, p, isFullBit):
+  bit = x.bit
+  if isFullBit:
+    x = zext(x, bit + unit)
+    y = zext(y, bit + unit)
+    v = sub(x, y)
+    c = trunc(lshr(v, bit), 1)
+    v = trunc(v, bit)
+  else:
+    v = sub(x, y)
+    c = trunc(lshr(v, bit - 1), 1)
+  # add p back when the subtraction borrowed (x < y), else add zero.
+  c = select(c, p, Imm(0, bit))
+  v = add(v, c)
+  return v
+
 def gen_fp_sub(name, N, dataVar, var_p, arg_p=False):
   bit = unit * N
   resetGlobalIdx();
@@ -158,20 +174,34 @@ def gen_fp_sub(name, N, dataVar, var_p, arg_p=False):
       pp, _ = derivePtr(dataVar, var_p)
     x = loadN(px, N, volatile=True)
     y = loadN(py, N, volatile=True)
-    if mont.isFullBit:
-      x = zext(x, bit + 1)
-      y = zext(y, bit + 1)
-
-    v = sub(x, y)
-    if mont.isFullBit:
-      c = trunc(lshr(v, bit), 1)
-      v = trunc(v, bit)
-    else:
-      c = trunc(lshr(v, bit-1), 1)
     p = loadN(pp, N)
-    c = select(c, p, Imm(0, bit))
-    v = add(v, c)
+    v = gen_sub_raw(x, y, p, mont.isFullBit)
     storeN(v, pz)
+    ret(Void)
+
+def gen_fp2_sub(name, N, dataVar, var_p, offset, arg_p=False):
+  bit = unit * N
+  resetGlobalIdx();
+  pz = IntPtr(unit)
+  px = IntPtr(unit)
+  py = IntPtr(unit)
+  args = [pz, px, py]
+  if arg_p:
+    pParam = IntPtr(unit)
+    args.append(pParam)
+  with Function(name, Void, *args):
+    if arg_p:
+      # 4th argument is a pointer to { ip, p[N] }; sub only needs p (element 1).
+      pp = getelementptr(pParam, 1)
+    else:
+      pp, _ = derivePtr(dataVar, var_p)
+    p = loadN(pp, N)
+    for i in range(2):
+      x = loadN(px, N, offset=i*offset, volatile=True)
+      y = loadN(py, N, offset=i*offset, volatile=True)
+      v = gen_sub_raw(x, y, p, mont.isFullBit)
+      storeN(v, pz, offset=i*offset)
+
     ret(Void)
 
 # return [xs[n-1]:xs[n-2]:...:xs[0]]
@@ -340,6 +370,7 @@ def main():
     gen_fp2_add(f'{opt.pre2}add', mont.pn, dataVar, opt.var_p, opt.offset, opt.arg_p)
   if opt.sub:
     gen_fp_sub(f'{opt.pre}sub', mont.pn, dataVar, opt.var_p, opt.arg_p)
+    gen_fp2_sub(f'{opt.pre2}sub', mont.pn, dataVar, opt.var_p, opt.offset, opt.arg_p)
 
   mulUU = gen_mulUU()
   extractHigh = gen_extractHigh()
