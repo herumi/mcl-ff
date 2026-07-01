@@ -13,6 +13,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <chrono>
+#include <initializer_list>
 #include <mcl_fp.h>
 #include <mcl/fp_def.hpp>
 #include <mcl/fp_tower.hpp>
@@ -53,6 +54,38 @@ extern "C" {
 	void x64_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void x642_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void x64_mul(uint64_t*, const uint64_t*, const uint64_t*);
+}
+
+
+template<class T>
+void check(const char *name, void (*f)(T& x, const T& y, const T& z), FpOp4 f0, std::initializer_list<FpOp> fs)
+{
+	const size_t n = sizeof(T) / sizeof(Fp);
+	cybozu::XorShift rg;
+	T x, y, z, z0;
+	const Unit *px = (const Unit*)&x;
+	const Unit *py = (const Unit*)&y;
+	for (int j = 0; j < 100; j++) {
+		for (size_t i = 0; i < n; i++) {
+			((Fp*)&x)[i].setByCSPRNG(rg);
+			((Fp*)&y)[i].setByCSPRNG(rg);
+		}
+		f(z, x, y);
+		f0((Unit*)&z0, px, py, llvm_var_param);
+		if (z != z0) {
+			fprintf(stderr, "ERR %s f0\n", name);
+			exit(1);
+		}
+		int idx = 0;
+		for (FpOp f1 : fs) {
+			f1((Unit*)&z0, px, py);
+			if (z != z0) {
+				fprintf(stderr, "ERR %s f1[%d]\n", name, idx);
+				exit(1);
+			}
+			idx++;
+		}
+	}
 }
 
 // A constant below p. For add/sub/mul the result stays below p, so chaining
@@ -161,55 +194,13 @@ int main() {
 		fprintf(stderr, "Fp2::init error\n");
 		return 1;
 	}
-	// verify x642_add/x642_sub against mcl Fp2::add/sub on random reduced inputs
-	cybozu::XorShift rg;
-	for (int i = 0; i < 10000; i++) {
-		Fp2 x, y, z1, z2;
-		x.a.setByCSPRNG(rg); x.b.setByCSPRNG(rg);
-		y.a.setByCSPRNG(rg); y.b.setByCSPRNG(rg);
-		Fp2::add(z1, x, y);
-		x642_add((uint64_t*)&z2, (const uint64_t*)&x, (const uint64_t*)&y);
-		if (z1 != z2) {
-			fprintf(stderr, "x642_add mismatch at i=%d\n", i);
-			return 1;
-		}
-		Fp2::sub(z1, x, y);
-		x642_sub((uint64_t*)&z2, (const uint64_t*)&x, (const uint64_t*)&y);
-		if (z1 != z2) {
-			fprintf(stderr, "x642_sub mismatch at i=%d\n", i);
-			return 1;
-		}
-	}
-	{
-		const int vn = (int)Fp::getOp().N;
-		printf("vn=%d\n", vn);
-		Fp x[2], y[2];
-		for (int i = 0; i < 2; i++) {
-			x[i].setByCSPRNG(rg);
-			y[i].setByCSPRNG(rg);
-		}
-		const Unit *px = (const Unit *)x;
-		const Unit *py = (const Unit *)y;
 
-		auto chk3 = [&](FpOp f0, FpOp fv, FpOp4 fa, const char* nm, int comps) {
-			Fp r0[2];
-			Fp rv[2];
-			Fp ra[2];
-			f0((Unit*)r0, px, py);
-			fv((Unit*)rv, px, py);
-			fa((Unit*)ra, px, py, llvm_var_param);
-			for (int i = 0; i < comps; i++) {
-				if (r0[i] != rv[i] || r0[i] != ra[i]) {
-					fprintf(stderr, "%s var/argp variant mismatch\n", nm);
-					exit(1);
-				}
-			}
-		};
-		chk3(llvm_add, llvm_var_add, llvm_argp_add, "add", 1);
-		chk3(llvm_sub, llvm_var_sub, llvm_argp_sub, "sub", 1);
-		chk3(llvm2_add, llvm_var2_add, llvm_argp2_add, "add2", 2);
-		chk3(llvm2_sub, llvm_var2_sub, llvm_argp2_sub, "sub2", 2);
-	}
+	check("add", Fp::add, llvm_argp_add, {llvm_add, llvm_var_add, x64_add});
+	check("sub", Fp::sub, llvm_argp_sub, {llvm_sub, llvm_var_sub, x64_sub});
+	check("add2", Fp2::add, llvm_argp2_add, {llvm2_add, llvm_var2_add, x642_add});
+	check("sub2", Fp2::sub, llvm_argp2_sub, {llvm2_sub, llvm_var2_sub, x642_sub});
+	check("mul", Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul});
+
 	const Entry tbl[] = {
 		{"add", llvm_add, llvm_var_add, llvm_argp_add, x64_add, 200000000},
 		{"add2", llvm2_add, llvm_var2_add, llvm_argp2_add, Fp::getOp().fp2_addA_/*Fp2::add*/, 200000000},
