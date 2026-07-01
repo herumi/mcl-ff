@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <initializer_list>
+#include <vector>
 #include <mcl_fp.h>
 #include <mcl/fp_def.hpp>
 #include <mcl/fp_tower.hpp>
@@ -21,8 +22,6 @@
 
 using namespace mcl;
 using namespace mcl::fp;
-
-static const int N = 6; // BLS12-381: 6 limbs (64bit)
 
 typedef void (*FpOp)(uint64_t* z, const uint64_t* x, const uint64_t* y);
 // add/sub/mul with the prime context passed as the 4th argument.
@@ -88,100 +87,59 @@ void check(const char *name, void (*f)(T& x, const T& y, const T& z), FpOp4 f0, 
 	}
 }
 
-// A constant below p. For add/sub/mul the result stays below p, so chaining
-// does not diverge. Sized N*2 so the Fp2 ops can read a second component.
-static const uint64_t Y[N*2] = {
-	0x111, 0x222, 0x333, 0x444, 0x555, 0x666,
-	0x777, 0x888, 0x999, 0xaaa, 0xbbb, 0xccc,
-};
-
-// latency: serial dependency chain repeating z = f(z, Y)
-static double bench_latency(FpOp f, long loop) {
-	alignas(64) uint64_t z[N*2] = {1, 2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 16};
+// Time one measurement. op(k) runs the operation on stream k. P streams:
+// P=1 is a serial dependency chain (latency); P=4 runs independent chains
+// (throughput). The chained operands stay below p, so they do not diverge.
+template<class Op>
+static double measure(Op op, int P, long loop)
+{
+	long m = loop / P;
+	for (long i = 0; i < m / 10; i++) for (int k = 0; k < P; k++) op(k); // warmup
 	auto t0 = std::chrono::steady_clock::now();
-	for (long i = 0; i < loop; i++) {
-		f(z, z, Y);
-	}
+	for (long i = 0; i < m; i++) for (int k = 0; k < P; k++) op(k);
 	auto t1 = std::chrono::steady_clock::now();
-	volatile uint64_t sink = z[0]; (void)sink;
-	return std::chrono::duration<double, std::nano>(t1 - t0).count() / loop;
+	return std::chrono::duration<double, std::nano>(t1 - t0).count() / (m * P);
 }
 
-// throughput: break the dependency with 4 independent accumulators
-static double bench_throughput(FpOp f, long loop) {
-	alignas(64) uint64_t a[4][N*2];
-	for (int k = 0; k < 4; k++)
-		for (int j = 0; j < N*2; j++) a[k][j] = j + k + 1;
-	long m = loop / 4;
-	auto t0 = std::chrono::steady_clock::now();
-	for (long i = 0; i < m; i++) {
-		f(a[0], a[0], Y);
-		f(a[1], a[1], Y);
-		f(a[2], a[2], Y);
-		f(a[3], a[3], Y);
+// Bench like check(): base = mcl's {Fp,Fp2}::{add,sub,mul}, f0 = the -arg-p
+// variant (prime context as the 4th argument), fs = the rest (llvm baked-p,
+// llvm -var-p, x64 asm). Temp vars are initialized as in check(). Prints one
+// latency row and one throughput row; the trailing ratios are time / base.
+template<class T>
+void benchmark(const char *name, int loop, void (*base)(T&, const T&, const T&), FpOp4 f0, std::initializer_list<FpOp> fs)
+{
+	const size_t n = sizeof(T) / sizeof(Fp);
+	cybozu::XorShift rg;
+	T x, y;
+	for (size_t i = 0; i < n; i++) {
+		((Fp*)&x)[i].setByCSPRNG(rg);
+		((Fp*)&y)[i].setByCSPRNG(rg);
 	}
-	auto t1 = std::chrono::steady_clock::now();
-	volatile uint64_t sink = a[0][0] + a[1][1] + a[2][2] + a[3][3]; (void)sink;
-	return std::chrono::duration<double, std::nano>(t1 - t0).count() / (m * 4);
-}
-
-// 4-argument variants for the -arg-p mul (prime context as the 4th argument).
-static double bench_latency4(FpOp4 f, const uint64_t* prm, long loop) {
-	alignas(64) uint64_t z[N*2] = {1, 2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 16};
-	auto t0 = std::chrono::steady_clock::now();
-	for (long i = 0; i < loop; i++) {
-		f(z, z, Y, prm);
-	}
-	auto t1 = std::chrono::steady_clock::now();
-	volatile uint64_t sink = z[0]; (void)sink;
-	return std::chrono::duration<double, std::nano>(t1 - t0).count() / loop;
-}
-
-static double bench_throughput4(FpOp4 f, const uint64_t* prm, long loop) {
-	alignas(64) uint64_t a[4][N*2];
-	for (int k = 0; k < 4; k++)
-		for (int j = 0; j < N*2; j++) a[k][j] = j + k + 1;
-	long m = loop / 4;
-	auto t0 = std::chrono::steady_clock::now();
-	for (long i = 0; i < m; i++) {
-		f(a[0], a[0], Y, prm);
-		f(a[1], a[1], Y, prm);
-		f(a[2], a[2], Y, prm);
-		f(a[3], a[3], Y, prm);
-	}
-	auto t1 = std::chrono::steady_clock::now();
-	volatile uint64_t sink = a[0][0] + a[1][1] + a[2][2] + a[3][3]; (void)sink;
-	return std::chrono::duration<double, std::nano>(t1 - t0).count() / (m * 4);
-}
-
-struct Entry {
-	const char* op;
-	FpOp llvm;
-	FpOp var;	 // -var-p variant, or nullptr if none
-	FpOp4 argp; // -arg-p variant (4th-arg pointer), or nullptr if none
-	FpOp x64;
-	long loop;
-};
-
-static void cell(double v, bool has) {
-	if (has) printf(" %10.3f", v); else printf(" %10s", "-");
-}
-static void ratio(double a, double b, bool has) {
-	if (has) printf(" %9.2f", a / b); else printf(" %9s", "-");
-}
-
-static void row(const char* op, const char* mode,
-								double ll, double var, double argp, double x64,
-								bool hasVar, bool hasArgp) {
-	printf("%-5s %-12s", op, mode);
-	cell(ll, true);
-	cell(var, hasVar);
-	cell(argp, hasArgp);
-	cell(x64, true);
-	ratio(ll, x64, true);
-	ratio(var, x64, hasVar);
-	ratio(argp, x64, hasArgp);
-	printf("\n");
+	const Unit *py = (const Unit*)&y;
+	alignas(64) T a[4];
+	auto reset = [&]() { for (int k = 0; k < 4; k++) a[k] = x; };
+	auto run = [&](int P) {
+		std::vector<double> v;
+		reset(); v.push_back(measure([&](int k) { base(a[k], a[k], y); }, P, loop));
+		reset(); v.push_back(measure([&](int k) { f0((Unit*)&a[k], (const Unit*)&a[k], py, llvm_var_param); }, P, loop));
+		for (FpOp f : fs) {
+			reset(); v.push_back(measure([&](int k) { f((Unit*)&a[k], (const Unit*)&a[k], py); }, P, loop));
+		}
+		volatile Unit sink = ((const Unit*)&a[0])[0]; (void)sink;
+		return v;
+	};
+	auto printRow = [&](const char *mode, const std::vector<double>& v) {
+		printf("%-5s %-11s", name, mode);
+		for (size_t i = 0; i < v.size(); i++) {
+			char buf[64];
+			if (i == 0) snprintf(buf, sizeof(buf), "%.3f", v[i]); // base
+			else snprintf(buf, sizeof(buf), "%.3f(%.2fx)", v[i], v[i] / v[0]);
+			printf(" %15s", buf);
+		}
+		printf("\n");
+	};
+	printRow("latency", run(1));
+	printRow("throughput", run(4));
 }
 
 int main() {
@@ -201,40 +159,12 @@ int main() {
 	check("sub2", Fp2::sub, llvm_argp2_sub, {llvm2_sub, llvm_var2_sub, x642_sub});
 	check("mul", Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul});
 
-	const Entry tbl[] = {
-		{"add", llvm_add, llvm_var_add, llvm_argp_add, x64_add, 200000000},
-		{"add2", llvm2_add, llvm_var2_add, llvm_argp2_add, Fp::getOp().fp2_addA_/*Fp2::add*/, 200000000},
-		// add2x: "llvm" column is gen_ff_x64's x642_add, "x64" column is mcl's
-		// Fp2::add, so the llvm/x64 ratio is (our x64) / mcl.
-		{"add2x", x642_add, nullptr, nullptr, Fp::getOp().fp2_addA_/*Fp2::add*/, 200000000},
-		{"sub", llvm_sub, llvm_var_sub, llvm_argp_sub, x64_sub, 200000000},
-		{"sub2", llvm2_sub, llvm_var2_sub, llvm_argp2_sub, Fp::getOp().fp2_subA_/*Fp2::sub*/, 200000000},
-		// sub2x: "llvm" column is gen_ff_x64's x642_sub, "x64" column is mcl's
-		// Fp2::sub, so the llvm/x64 ratio is (our x64) / mcl.
-		{"sub2x", x642_sub, nullptr, nullptr, Fp::getOp().fp2_subA_/*Fp2::sub*/, 200000000},
-		{"mul", llvm_mul, llvm_var_mul, llvm_argp_mul, x64_mul, 50000000},
-	};
-	printf("unit: ns/op (smaller is faster); var = -var-p, argp = -arg-p (4th-arg p)\n");
-	printf("%-5s %-12s %10s %10s %10s %10s %9s %9s %9s\n",
-		"op", "mode", "llvm", "var", "argp", "x64",
-		"llvm/x64", "var/x64", "argp/x64");
-	for (const Entry& e : tbl) {
-		bool hv = e.var != nullptr;
-		bool ha = e.argp != nullptr;
-		// warmup
-		bench_latency(e.llvm, e.loop / 10);
-		bench_latency(e.x64, e.loop / 10);
-		if (hv) bench_latency(e.var, e.loop / 10);
-		if (ha) bench_latency4(e.argp, llvm_var_param, e.loop / 10);
-		double ll = bench_latency(e.llvm, e.loop);
-		double lx = bench_latency(e.x64, e.loop);
-		double lv = hv ? bench_latency(e.var, e.loop) : 0;
-		double la = ha ? bench_latency4(e.argp, llvm_var_param, e.loop) : 0;
-		double tl = bench_throughput(e.llvm, e.loop);
-		double tx = bench_throughput(e.x64, e.loop);
-		double tv = hv ? bench_throughput(e.var, e.loop) : 0;
-		double ta = ha ? bench_throughput4(e.argp, llvm_var_param, e.loop) : 0;
-		row(e.op, "latency",		ll, lv, la, lx, hv, ha);
-		row(e.op, "throughput", tl, tv, ta, tx, hv, ha);
-	}
+	printf("unit: ns/op (smaller is faster); base = mcl, (Nx) = time / base\n");
+	printf("%-5s %-11s %15s %15s %15s %15s %15s\n",
+		"op", "mode", "base", "argp", "llvm", "var", "x64");
+	benchmark("add", 200000000, Fp::add, llvm_argp_add, {llvm_add, llvm_var_add, x64_add});
+	benchmark("sub", 200000000, Fp::sub, llvm_argp_sub, {llvm_sub, llvm_var_sub, x64_sub});
+	benchmark("add2", 200000000, Fp2::add, llvm_argp2_add, {llvm2_add, llvm_var2_add, x642_add});
+	benchmark("sub2", 200000000, Fp2::sub, llvm_argp2_sub, {llvm2_sub, llvm_var2_sub, x642_sub});
+	benchmark("mul", 50000000, Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul});
 }
