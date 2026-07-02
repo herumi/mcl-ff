@@ -114,11 +114,7 @@ def gen_add(name, mont):
         cmovnc(t2[i], t1[i])
         mov(ptr(pz + i * 8), t2[i])
 
-# Fp2 add: two independent Fp adds on the [a, b] components, b at byte
-# offset*8 from a. Mirrors mcl's gen_fp2_add (gen_raw_fp_add twice).
-# p is read from rip memory (no immediate materialize) so the conditional
-# subtract is sbb+cmovc and we fit 2*N limbs (t1, t2) in 11 temps + rax,
-# keeping px/py live across both halves.
+# Fp2 add: two independent Fp adds on the [a, b] components, b at byte offset*8 from a.
 def gen_fp2_add(name, mont, offset):
   N = mont.pn
   align(16)
@@ -148,13 +144,11 @@ def gen_fp2_add(name, mont, offset):
           cmovc(t2[i], t1[i])
           mov(ptr(pz + off + i * 8), t2[i])
 
-# Fp2 sub: two independent Fp subs on the [a, b] components, b at byte
-# offset*8 from a. Mirrors mcl's gen_raw_fp_sub (fp_generator.hpp) pointer-cmov
-# trick, which is lighter on uops (better throughput) than a 2*N-register
-# select: t = x - y, then cmovc picks &p or &zero into rax by the borrow, and
-# t += *rax folds the conditional +p as a memory add. Uses only N+1 temps + rax,
-# so both halves reuse the same registers. Correct for full-bit p too (t + p is
-# taken mod 2^(64N)).
+# Fp2 sub: two independent Fp subs on the [a, b] components, b at byte offset*8 from a.
+# pointer-cmov trick, which is lighter on uops (better throughput) than a 2*N-register select: t = x - y,
+# then cmovc picks &p or &zero into rax by the borrow, and t += *rax folds the conditional +p as a memory add.
+# Uses only N+1 temps + rax, so both halves reuse the same registers.
+# Correct for full-bit p too (t + p is taken mod 2^(64N)).
 def gen_fp2_sub(name, mont, offset):
   N = mont.pn
   align(16)
@@ -285,53 +279,52 @@ def gen_mul(name, mont):
       cmovc_pp(pk, keep)
       store_mp(pz, pk)
 
-# Montgomery mul(x, y) without adcx/adox (mulx only), for pre-Broadwell CPUs.
-# Follows the shape LLVM generates for the same algorithm when compiled
-# without -madx: issue all the independent mulx of a row first and combine
-# the hi/lo words with single add/adc chains, spilling what does not fit in
-# registers (x limbs, pz, py, c[0] and lo0 of the current row). This costs
-# about 3 add/adc per mulx column vs 5 for the naive fold-the-previous-high
-# variant. p is read RIP-relative so no register holds its address.
-#
-# Loop invariant: the accumulator c (< 2p, N limbs) has c[0] spilled and
-# c[1..N-1] in registers. One iteration (rdx = y[i]):
-#   A: row = x * y[i]; one chain combines row[j] = lo[j] + hi[j-1]
-#      (lo[0] is spilled so that the register peak fits in the pool).
+# Montgomery mul(x, y) w/mulx and w/o adx(adcx/adox) is faster than w/adx.
+# Loop invariant: the accumulator c (< 2p, N limbs) is in registers except
+# possibly c[N-1] (see below). One iteration (rdx = y[i]):
+#   A: row = x * y[i]; one chain combines row[j] = lo[j] + hi[j-1].
 #   B: d = c + row (one chain; d has N+1 limbs, all in registers).
-#   C: q = d[0] * ip; chain1 t[j] = lo(p[j]*q) + d[j] (t[0] = 0, dropped),
+#   C: q = d[0] * ip; chain1 t[j] = lo(p[j]*q) + d[j] (t[0] = 0, dropped;
+#      its carry is (d[0] != 0), computed by neg without waiting for mulx),
 #      chain2 c'[j] = t[j+1] + hi(p[j]*q), which doubles as the /2^64 shift.
-# The pool has 13 registers (3 args + 10 temps; rax/rdx reserved) and the
-# peak usage in C is 2N+1, so any N <= 6 fits; N=4 and 6 share the code.
 def gen_mul_wo_adx(name, mont):
   N = mont.pn
   assert N in (4, 6)
   align(16)
   with FuncProc(name):
     assert not mont.isFullBit
-    with StackFrame(3, 10, useRDX=True, stackSizeByte=(N+4)*8) as sf:
-      S_pz = ptr(rsp + 0)
-      S_py = ptr(rsp + 8)
-      S_c0 = ptr(rsp + 16)
-      S_lo0 = ptr(rsp + 24)
-      def S_x(j):
-        return ptr(rsp + 32 + j * 8)
-      mov(S_pz, sf.p[0])
-      mov(S_py, sf.p[2])
-      for j in range(N):
-        mov(rax, ptr(sf.p[1] + j * 8))
-        mov(S_x(j), rax)
-      # pz/py/x are on the stack now, so all arg/temp registers are scratch
-      pool = sf.p[:] + sf.t[:]
+    # With N=6, registers are insufficient, so part of c is spilled to the stack.
+    allInRegs = 2*N+5 <= 13
+    with StackFrame(3, 10, useRDX=True, stackSizeByte=0 if allInRegs else (N+3)*8) as sf:
+      pz = sf.p[0]
+      px = sf.p[1]
+      py = sf.p[2]
+      if allInRegs:
+        cSpill = None
+        pool = sf.t[:]
+      else:
+        S_pz = ptr(rsp + 0)
+        S_py = ptr(rsp + 8)
+        cSpill = N-1 # which limb of c to spill; must be >= 1
+        S_ct = ptr(rsp + 16) # c[cSpill] between iterations
+        def S_x(j):
+          return ptr(rsp + 24 + j * 8)
+        mov(S_pz, pz)
+        mov(S_py, py)
+        pool = [pz] + sf.t[:]
       def alloc():
         return pool.pop()
       def release(r):
         pool.append(r)
-      c = None # c[0] lives in S_c0, c[1..N-1] in registers
+      c = None
       for i in range(N):
         isFirst = i == 0
         isLast = i == N-1
-        mov(rdx, S_py)
-        mov(rdx, ptr(rdx + i * 8)) # rdx = y[i]
+        if allInRegs or isFirst:
+          mov(rdx, ptr(py + i * 8)) # rdx = y[i]
+        else:
+          mov(rdx, S_py)
+          mov(rdx, ptr(rdx + i * 8)) # rdx = y[i]
         # A: row = x * y[i]
         L = [None] * N
         hi = None
@@ -339,42 +332,49 @@ def gen_mul_wo_adx(name, mont):
           prev = hi
           hi = alloc()
           L[j] = alloc()
-          mulx(hi, L[j], S_x(j))
-          if j == 0:
-            if not isFirst:
-              mov(S_lo0, L[0])
-              release(L[0])
-              L[0] = None
+          if allInRegs or isFirst:
+            mulx(hi, L[j], ptr(px + j * 8))
           else:
+            mulx(hi, L[j], S_x(j))
+          if j > 0:
             add_ex(L[j], prev, j == 1)
             release(prev)
         adc(hi, 0) # row[N]
+        if isFirst and not allInRegs:
+          for j in range(N):
+            mov(rax, ptr(px + j * 8))
+            mov(S_x(j), rax)
+          release(px)
+          release(py)
         # B: d = c + row
-        if isFirst:
-          D = L + [hi]
-        else:
-          d0 = alloc()
-          mov(d0, S_c0)
-          add(d0, S_lo0)
-          for j in range(1, N):
-            adc(L[j], c[j])
-            release(c[j])
+        if not isFirst:
+          for j in range(N):
+            if j == cSpill:
+              adc(L[j], S_ct)
+            else:
+              add_ex(L[j], c[j], j == 0)
+              release(c[j])
           adc(hi, 0)
-          D = [d0] + L[1:] + [hi]
+        D = L + [hi]
         # C: q = d[0] * ip ; c' = (d + q*p)/2^64
         mov(rdx, mont.ip)
         imul(rdx, D[0]) # rdx = q
+        # t[0] = lo(p[0]*q) + d[0] = 0 by the choice of q; only its carry
+        # matters and lo(p[0]*q) = -d[0] mod 2^64, so CF = (d[0] != 0), which
+        # is what neg computes. This starts chain1 without waiting for mulx.
+        neg(D[0])
+        release(D[0])
         PH = [None] * N
         T = [None] * (N+1)
         for j in range(N):
           PH[j] = alloc()
           lo = alloc()
           mulx(PH[j], lo, ptr(rip + 'p' + j * 8))
-          add_ex(lo, D[j], j == 0)
-          release(D[j])
           if j == 0:
-            release(lo) # t[0] = 0 by the choice of q; only its carry matters
+            release(lo) # lo(p[0]*q) is not needed, see above
           else:
+            adc(lo, D[j])
+            release(D[j])
             T[j] = lo
         adc(D[N], 0)
         T[N] = D[N]
@@ -383,10 +383,11 @@ def gen_mul_wo_adx(name, mont):
           c[j] = T[j+1]
           add_ex(c[j], PH[j], j == 0)
           release(PH[j])
-        if not isLast:
-          mov(S_c0, c[0])
-          release(c[0])
-          c[0] = None
+          if j == cSpill and not isLast:
+            # spill right after it is produced: maximum store-to-load slack
+            mov(S_ct, c[j])
+            release(c[j])
+            c[j] = None
       # c < 2p; output c - p if c >= p
       keep = []
       for j in range(N):
@@ -394,8 +395,10 @@ def gen_mul_wo_adx(name, mont):
       mov_pp(keep, c)
       sub_pm(c, rip + 'p')
       cmovc_pp(c, keep)
-      mov(rax, S_pz)
-      store_mp(rax, c)
+      if not allInRegs:
+        pz = rax
+        mov(pz, S_pz)
+      store_mp(pz, c)
 
 def main():
   parser = getDefaultParser('gen bint')
