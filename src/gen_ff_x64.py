@@ -94,6 +94,10 @@ def gen_add(name, mont):
       px = sf.p[1]
       py = sf.p[2]
       t1 = sf.t[0:N]
+
+      # t1 = x + y
+      # t2 = t1 + (2**(64*N)-p)
+      # ret = CF ? t2 : t1
       for i in range(N):
         mov(t1[i], ptr(px + i * 8))
         add_ex(t1[i], ptr(py + i * 8), i == 0)
@@ -102,22 +106,12 @@ def gen_add(name, mont):
       t2.append(py)
       assert len(t2) == N
 
-      """
-      negp = 2**(N*8) - mont.p
+      negp = 2**(64*N) - mont.p
       for i in range(N):
         mov(t2[i], (negp >> (i*64))%(2**64))
         add_ex(t2[i], t1[i], i == 0)
       for i in range(N):
-        cmovc(t2[i], t1[i])
-        mov(ptr(pz + i * 8), t2[i])
-
-      """
-      for i in range(N):
-        mov(t2[i], t1[i])
-        mov(rax, (mont.p >> (i*64))%(2**64))
-        sub_ex(t2[i], rax, i == 0)
-      for i in range(N):
-        cmovc(t2[i], t1[i])
+        cmovnc(t2[i], t1[i])
         mov(ptr(pz + i * 8), t2[i])
 
 # Fp2 add: two independent Fp adds on the [a, b] components, b at byte
