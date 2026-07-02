@@ -146,18 +146,22 @@ void benchmark(const char *name, int loop, void (*base)(T&, const T&, const T&),
 	printRow("throughput", run(4));
 }
 
+static const int TEST_MODE = 1<<0;
+static const int BENCH_MODE = 1<<1;
+
 template<class T>
-void check_and_bench(const char *name, int loop, void (*base)(T&, const T&, const T&), FpOp4 f0, std::initializer_list<FpOp> fs)
+void check_and_bench(int mode, const char *name, int loop, void (*base)(T&, const T&, const T&), FpOp4 f0, std::initializer_list<FpOp> fs)
 {
-	check(name, base, f0, fs);
-	benchmark(name, loop, base, f0, fs);
+	if (mode & TEST_MODE) check(name, base, f0, fs);
+	if (mode & BENCH_MODE) benchmark(name, loop, base, f0, fs);
 }
 
 int main(int argc, char *argv[]) {
+	int mode;
 	cybozu::Option opt;
 	std::vector<std::string> vs;
-	const char *fullSet = "add add2 sub sub2 mul";
-	opt.appendVec(&vs, "set", std::string(": select from ") + fullSet);
+	opt.appendVec(&vs, "set", ": select from {add,sub,add2,sub2,mul}");
+	opt.appendOpt(&mode, TEST_MODE | BENCH_MODE, "mode", ": test(1), bench(2), both(3), default(3)");
 	opt.appendHelp("h");
 	if (!opt.parse(argc, argv)) {
 		opt.usage();
@@ -175,22 +179,26 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	printf("unit: ns/op (smaller is faster); base = mcl, (Nx) = time / base\n");
-	printf("%-5s %-11s %15s %15s %15s %15s %15s %15s\n",
-		"op", "mode", "base", "argp", "llvm", "var", "x64", "x64woadx");
+	if (mode & BENCH_MODE) {
+		printf("unit: ns/op (smaller is faster); base = mcl, (Nx) = time / base\n");
+		printf("%-5s %-11s %15s %15s %15s %15s %15s %15s\n",
+			"op", "mode", "base", "argp", "llvm", "var", "x64", "x64woadx");
+	}
+	const int C = 200000000;
+	const int C2 = 50000000;
 	if (ss.empty() || ss.find("add") != ss.end()) {
-		check_and_bench("add", 200000000, Fp::add, llvm_argp_add, {llvm_add, llvm_var_add, x64_add});
+		check_and_bench(mode, "add", C, Fp::add, llvm_argp_add, {llvm_add, llvm_var_add, x64_add});
 	}
 	if (ss.empty() || ss.find("add") != ss.end()) {
-		check_and_bench("sub", 200000000, Fp::sub, llvm_argp_sub, {llvm_sub, llvm_var_sub, x64_sub});
+		check_and_bench(mode, "sub", C, Fp::sub, llvm_argp_sub, {llvm_sub, llvm_var_sub, x64_sub});
 	}
 	if (ss.empty() || ss.find("add2") != ss.end()) {
-		check_and_bench("add2", 200000000, Fp2::add, llvm_argp2_add, {llvm2_add, llvm_var2_add, x642_add});
+		check_and_bench(mode, "add2", C, Fp2::add, llvm_argp2_add, {llvm2_add, llvm_var2_add, x642_add});
 	}
 	if (ss.empty() || ss.find("sub2") != ss.end()) {
-		check_and_bench("sub2", 200000000, Fp2::sub, llvm_argp2_sub, {llvm2_sub, llvm_var2_sub, x642_sub});
+		check_and_bench(mode, "sub2", C, Fp2::sub, llvm_argp2_sub, {llvm2_sub, llvm_var2_sub, x642_sub});
 	}
 	if (ss.empty() || ss.find("mul") != ss.end()) {
-		check_and_bench("mul", 50000000, Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul, x64_mul_wo_adx});
+		check_and_bench(mode, "mul", C2, Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul, x64_mul_wo_adx});
 	}
 }

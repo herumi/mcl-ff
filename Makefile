@@ -22,15 +22,16 @@ HEADER=include/$(NAME).h
 X64_ASM=src/$(NAME)_x64.S
 MCL_FF_OBJ=obj/$(NAME).o
 
-TEST_SRC=test/fp_test.cpp
-TEST_BASE=$(notdir $(TEST_SRC:.cpp=))
-TEST_OBJ=obj/$(TEST_BASE).o
-TEST_EXE=bin/$(TEST_BASE).exe
-DEPEND_FILE=$(TEST_OBJ:.o=.d)
+BENCH_SRC=test/bench.cpp
+BENCH_BASE=$(notdir $(BENCH_SRC:.cpp=))
+BENCH_OBJ=obj/$(BENCH_BASE).o
+BENCH_EXE=bin/$(BENCH_BASE).exe
+DEPEND_FILE=$(BENCH_OBJ:.o=.d)
 
-TARGET=$(LL) $(HEADER) $(TEST_EXE)
+TARGET=$(LL) $(HEADER) $(BENCH_EXE)
 
 CFLAGS=-Wall -Wextra -I ./include -I $(MCL_DIR)/include -fPIC -g
+CFLAGS+=-Wno-unused-command-line-argument -Wno-override-module
 LDFLAGS=$(MCL_FF_OBJ) $(MCL_LIB)
 
 ifeq ($(ARCH),x86_64)
@@ -72,12 +73,12 @@ $(HEADER): src/gen_ff.py Makefile
 	@$(PYTHON) $< -u $(BIT) -proto >> $@
 	@cat src/tail.h >> $@
 
-test: $(TEST_EXE)
-	@sh -ec 'for i in $(TEST_EXE); do echo $$i; env LSAN_OPTIONS=verbosity=0:log_threads=1 ./$$i; done'
+test: $(BENCH_EXE)
+	$(BENCH_EXE) -mode 1
+#	@sh -ec 'for i in $(TEST_EXE); do echo $$i; env LSAN_OPTIONS=verbosity=0:log_threads=1 ./$$i; done'
 
 # Generate add/sub/mul from gen_ff.py (LLVM) and gen_ff_x64.py (x64 asm) under
 # distinct prefixes and compare them within a single executable (test/bench.cpp).
-BENCH_EXE=bin/bench.exe
 src/bench_llvm.ll: src/gen_ff.py
 	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul > $@
 src/bench_llvm_var.ll: src/gen_ff.py
