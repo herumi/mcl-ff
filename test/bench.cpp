@@ -53,6 +53,8 @@ extern "C" {
 	void x64_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void x642_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void x64_mul(uint64_t*, const uint64_t*, const uint64_t*);
+	// mulx-only variant (no adcx/adox) for pre-Broadwell CPUs
+	void x64_mul_wo_adx(uint64_t*, const uint64_t*, const uint64_t*);
 }
 
 
@@ -157,14 +159,14 @@ int main() {
 	check("sub", Fp::sub, llvm_argp_sub, {llvm_sub, llvm_var_sub, x64_sub});
 	check("add2", Fp2::add, llvm_argp2_add, {llvm2_add, llvm_var2_add, x642_add});
 	check("sub2", Fp2::sub, llvm_argp2_sub, {llvm2_sub, llvm_var2_sub, x642_sub});
-	check("mul", Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul});
+	check("mul", Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul, x64_mul_wo_adx});
 
 	printf("unit: ns/op (smaller is faster); base = mcl, (Nx) = time / base\n");
-	printf("%-5s %-11s %15s %15s %15s %15s %15s\n",
-		"op", "mode", "base", "argp", "llvm", "var", "x64");
+	printf("%-5s %-11s %15s %15s %15s %15s %15s %15s\n",
+		"op", "mode", "base", "argp", "llvm", "var", "x64", "x64woadx");
 	benchmark("add", 200000000, Fp::add, llvm_argp_add, {llvm_add, llvm_var_add, x64_add});
 	benchmark("sub", 200000000, Fp::sub, llvm_argp_sub, {llvm_sub, llvm_var_sub, x64_sub});
 	benchmark("add2", 200000000, Fp2::add, llvm_argp2_add, {llvm2_add, llvm_var2_add, x642_add});
 	benchmark("sub2", 200000000, Fp2::sub, llvm_argp2_sub, {llvm2_sub, llvm_var2_sub, x642_sub});
-	benchmark("mul", 50000000, Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul});
+	benchmark("mul", 50000000, Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul, x64_mul_wo_adx});
 }

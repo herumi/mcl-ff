@@ -285,6 +285,118 @@ def gen_mul(name, mont):
       cmovc_pp(pk, keep)
       store_mp(pz, pk)
 
+# Montgomery mul(x, y) without adcx/adox (mulx only), for pre-Broadwell CPUs.
+# Follows the shape LLVM generates for the same algorithm when compiled
+# without -madx: issue all the independent mulx of a row first and combine
+# the hi/lo words with single add/adc chains, spilling what does not fit in
+# registers (x limbs, pz, py, c[0] and lo0 of the current row). This costs
+# about 3 add/adc per mulx column vs 5 for the naive fold-the-previous-high
+# variant. p is read RIP-relative so no register holds its address.
+#
+# Loop invariant: the accumulator c (< 2p, N limbs) has c[0] spilled and
+# c[1..N-1] in registers. One iteration (rdx = y[i]):
+#   A: row = x * y[i]; one chain combines row[j] = lo[j] + hi[j-1]
+#      (lo[0] is spilled so that the register peak fits in the pool).
+#   B: d = c + row (one chain; d has N+1 limbs, all in registers).
+#   C: q = d[0] * ip; chain1 t[j] = lo(p[j]*q) + d[j] (t[0] = 0, dropped),
+#      chain2 c'[j] = t[j+1] + hi(p[j]*q), which doubles as the /2^64 shift.
+# The pool has 13 registers (3 args + 10 temps; rax/rdx reserved) and the
+# peak usage in C is 2N+1, so any N <= 6 fits; N=4 and 6 share the code.
+def gen_mul_wo_adx(name, mont):
+  N = mont.pn
+  assert N in (4, 6)
+  align(16)
+  with FuncProc(name):
+    assert not mont.isFullBit
+    with StackFrame(3, 10, useRDX=True, stackSizeByte=(N+4)*8) as sf:
+      S_pz = ptr(rsp + 0)
+      S_py = ptr(rsp + 8)
+      S_c0 = ptr(rsp + 16)
+      S_lo0 = ptr(rsp + 24)
+      def S_x(j):
+        return ptr(rsp + 32 + j * 8)
+      mov(S_pz, sf.p[0])
+      mov(S_py, sf.p[2])
+      for j in range(N):
+        mov(rax, ptr(sf.p[1] + j * 8))
+        mov(S_x(j), rax)
+      # pz/py/x are on the stack now, so all arg/temp registers are scratch
+      pool = sf.p[:] + sf.t[:]
+      def alloc():
+        return pool.pop()
+      def release(r):
+        pool.append(r)
+      c = None # c[0] lives in S_c0, c[1..N-1] in registers
+      for i in range(N):
+        isFirst = i == 0
+        isLast = i == N-1
+        mov(rdx, S_py)
+        mov(rdx, ptr(rdx + i * 8)) # rdx = y[i]
+        # A: row = x * y[i]
+        L = [None] * N
+        hi = None
+        for j in range(N):
+          prev = hi
+          hi = alloc()
+          L[j] = alloc()
+          mulx(hi, L[j], S_x(j))
+          if j == 0:
+            if not isFirst:
+              mov(S_lo0, L[0])
+              release(L[0])
+              L[0] = None
+          else:
+            add_ex(L[j], prev, j == 1)
+            release(prev)
+        adc(hi, 0) # row[N]
+        # B: d = c + row
+        if isFirst:
+          D = L + [hi]
+        else:
+          d0 = alloc()
+          mov(d0, S_c0)
+          add(d0, S_lo0)
+          for j in range(1, N):
+            adc(L[j], c[j])
+            release(c[j])
+          adc(hi, 0)
+          D = [d0] + L[1:] + [hi]
+        # C: q = d[0] * ip ; c' = (d + q*p)/2^64
+        mov(rdx, mont.ip)
+        imul(rdx, D[0]) # rdx = q
+        PH = [None] * N
+        T = [None] * (N+1)
+        for j in range(N):
+          PH[j] = alloc()
+          lo = alloc()
+          mulx(PH[j], lo, ptr(rip + 'p' + j * 8))
+          add_ex(lo, D[j], j == 0)
+          release(D[j])
+          if j == 0:
+            release(lo) # t[0] = 0 by the choice of q; only its carry matters
+          else:
+            T[j] = lo
+        adc(D[N], 0)
+        T[N] = D[N]
+        c = [None] * N
+        for j in range(N):
+          c[j] = T[j+1]
+          add_ex(c[j], PH[j], j == 0)
+          release(PH[j])
+        if not isLast:
+          mov(S_c0, c[0])
+          release(c[0])
+          c[0] = None
+      # c < 2p; output c - p if c >= p
+      keep = []
+      for j in range(N):
+        keep.append(alloc())
+      mov_pp(keep, c)
+      sub_pm(c, rip + 'p')
+      cmovc_pp(c, keep)
+      mov(rax, S_pz)
+      store_mp(rax, c)
+
 def main():
   parser = getDefaultParser('gen bint')
   parser.add_argument('-p', type=str, default='', help='characteristic of a finite field')
@@ -294,6 +406,7 @@ def main():
   parser.add_argument('-add', action='store_true', default=False, help='add add function')
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
   parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
+  parser.add_argument('-mul_wo_adx', action='store_true', default=False, help='add mul function without adcx/adox (N=4, 6 only)')
   opt = parser.parse_args()
 
   init(opt)
@@ -325,6 +438,9 @@ def main():
   if opt.mul and not mont.isFullBit:
     name = f'{opt.pre}mul'
     gen_mul(name, mont)
+  if opt.mul_wo_adx and not mont.isFullBit:
+    name = f'{opt.pre}mul_wo_adx'
+    gen_mul_wo_adx(name, mont)
 
   term()
 

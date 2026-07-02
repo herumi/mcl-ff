@@ -85,7 +85,7 @@ src/bench_llvm_var.ll: src/gen_ff.py
 src/bench_llvm_argp.ll: src/gen_ff.py
 	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_argp_ -add -sub -mul -arg-p > $@
 src/bench_x64.S: src/gen_ff_x64.py
-	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul > $@
+	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul -mul_wo_adx > $@
 obj/bench_llvm.o: src/bench_llvm.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
 obj/bench_llvm_var.o: src/bench_llvm_var.ll
