@@ -19,6 +19,8 @@
 #include <mcl/fp_def.hpp>
 #include <mcl/fp_tower.hpp>
 #include <cybozu/xorshift.hpp>
+#include <cybozu/option.hpp>
+#include <set>
 
 using namespace mcl;
 using namespace mcl::fp;
@@ -144,7 +146,25 @@ void benchmark(const char *name, int loop, void (*base)(T&, const T&, const T&),
 	printRow("throughput", run(4));
 }
 
-int main() {
+template<class T>
+void check_and_bench(const char *name, int loop, void (*base)(T&, const T&, const T&), FpOp4 f0, std::initializer_list<FpOp> fs)
+{
+	check(name, base, f0, fs);
+	benchmark(name, loop, base, f0, fs);
+}
+
+int main(int argc, char *argv[]) {
+	cybozu::Option opt;
+	std::vector<std::string> vs;
+	const char *fullSet = "add add2 sub sub2 mul";
+	opt.appendVec(&vs, "set", std::string(": select from ") + fullSet);
+	opt.appendHelp("h");
+	if (!opt.parse(argc, argv)) {
+		opt.usage();
+		return 1;
+	}
+	opt.put();
+	std::set<std::string> ss(vs.begin(), vs.end());
 	const char *pStr = (const char*)llvm_get_prime();
 	printf("p=%s\n", pStr);
 	Fp::init(pStr, 1, 1);
@@ -155,18 +175,22 @@ int main() {
 		return 1;
 	}
 
-	check("add", Fp::add, llvm_argp_add, {llvm_add, llvm_var_add, x64_add});
-	check("sub", Fp::sub, llvm_argp_sub, {llvm_sub, llvm_var_sub, x64_sub});
-	check("add2", Fp2::add, llvm_argp2_add, {llvm2_add, llvm_var2_add, x642_add});
-	check("sub2", Fp2::sub, llvm_argp2_sub, {llvm2_sub, llvm_var2_sub, x642_sub});
-	check("mul", Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul, x64_mul_wo_adx});
-
 	printf("unit: ns/op (smaller is faster); base = mcl, (Nx) = time / base\n");
 	printf("%-5s %-11s %15s %15s %15s %15s %15s %15s\n",
 		"op", "mode", "base", "argp", "llvm", "var", "x64", "x64woadx");
-	benchmark("add", 200000000, Fp::add, llvm_argp_add, {llvm_add, llvm_var_add, x64_add});
-	benchmark("sub", 200000000, Fp::sub, llvm_argp_sub, {llvm_sub, llvm_var_sub, x64_sub});
-	benchmark("add2", 200000000, Fp2::add, llvm_argp2_add, {llvm2_add, llvm_var2_add, x642_add});
-	benchmark("sub2", 200000000, Fp2::sub, llvm_argp2_sub, {llvm2_sub, llvm_var2_sub, x642_sub});
-	benchmark("mul", 50000000, Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul, x64_mul_wo_adx});
+	if (ss.empty() || ss.find("add") != ss.end()) {
+		check_and_bench("add", 200000000, Fp::add, llvm_argp_add, {llvm_add, llvm_var_add, x64_add});
+	}
+	if (ss.empty() || ss.find("add") != ss.end()) {
+		check_and_bench("sub", 200000000, Fp::sub, llvm_argp_sub, {llvm_sub, llvm_var_sub, x64_sub});
+	}
+	if (ss.empty() || ss.find("add2") != ss.end()) {
+		check_and_bench("add2", 200000000, Fp2::add, llvm_argp2_add, {llvm2_add, llvm_var2_add, x642_add});
+	}
+	if (ss.empty() || ss.find("sub2") != ss.end()) {
+		check_and_bench("sub2", 200000000, Fp2::sub, llvm_argp2_sub, {llvm2_sub, llvm_var2_sub, x642_sub});
+	}
+	if (ss.empty() || ss.find("mul") != ss.end()) {
+		check_and_bench("mul", 50000000, Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul, x64_mul_wo_adx});
+	}
 }
