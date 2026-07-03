@@ -31,7 +31,7 @@ DEPEND_FILE=$(BENCH_OBJ:.o=.d)
 TARGET=$(LL) $(HEADER) $(BENCH_EXE)
 
 CFLAGS=-Wall -Wextra -I ./include -I $(MCL_DIR)/include -fPIC -g
-CFLAGS+=-Wno-unused-command-line-argument -Wno-override-module
+#CFLAGS+=-Wno-unused-command-line-argument -Wno-override-module
 LDFLAGS=$(MCL_FF_OBJ) $(MCL_LIB)
 
 ifeq ($(ARCH),x86_64)

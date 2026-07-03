@@ -27,8 +27,7 @@ using namespace mcl::fp;
 
 typedef void (*FpOp)(uint64_t* z, const uint64_t* x, const uint64_t* y);
 // add/sub/mul with the prime context passed as the 4th argument.
-typedef void (*FpOp4)(uint64_t* z, const uint64_t* x, const uint64_t* y,
-											const uint64_t* p);
+typedef void (*FpOp4)(uint64_t* z, const uint64_t* x, const uint64_t* y, const uint64_t* p);
 
 extern "C" {
 	const uint8_t* llvm_get_prime();
@@ -60,12 +59,13 @@ extern "C" {
 }
 
 
-template<class T>
-void check(const char *name, void (*f)(T& x, const T& y, const T& z), FpOp4 f0, std::initializer_list<FpOp> fs)
+template<class R, class T>
+void check(const char *name, void (*f)(R& x, const T& y, const T& z), FpOp4 f0, std::initializer_list<FpOp> fs)
 {
 	const size_t n = sizeof(T) / sizeof(Fp);
 	cybozu::XorShift rg;
-	T x, y, z, z0;
+	T x, y;
+	R z, z0;
 	const Unit *px = (const Unit*)&x;
 	const Unit *py = (const Unit*)&y;
 	for (int j = 0; j < 100; j++) {
@@ -74,13 +74,16 @@ void check(const char *name, void (*f)(T& x, const T& y, const T& z), FpOp4 f0, 
 			((Fp*)&y)[i].setByCSPRNG(rg);
 		}
 		f(z, x, y);
-		f0((Unit*)&z0, px, py, llvm_var_param);
-		if (z != z0) {
-			fprintf(stderr, "ERR %s f0\n", name);
-			exit(1);
+		if (f0) {
+			f0((Unit*)&z0, px, py, llvm_var_param);
+			if (z != z0) {
+				fprintf(stderr, "ERR %s f0\n", name);
+				exit(1);
+			}
 		}
 		int idx = 0;
 		for (FpOp f1 : fs) {
+			if (!f1) continue;
 			f1((Unit*)&z0, px, py);
 			if (z != z0) {
 				fprintf(stderr, "ERR %s f1[%d]\n", name, idx);
@@ -95,12 +98,12 @@ void check(const char *name, void (*f)(T& x, const T& y, const T& z), FpOp4 f0, 
 // P=1 is a serial dependency chain (latency); P=4 runs independent chains
 // (throughput). The chained operands stay below p, so they do not diverge.
 template<class Op>
-static double measure(Op op, int P, long loop)
+static double measure(Op op, size_t P, size_t loop)
 {
-	long m = loop / P;
-	for (long i = 0; i < m / 10; i++) for (int k = 0; k < P; k++) op(k); // warmup
+	size_t m = loop / P;
+	for (size_t i = 0; i < m / 10; i++) for (size_t k = 0; k < P; k++) op(k); // warmup
 	auto t0 = std::chrono::steady_clock::now();
-	for (long i = 0; i < m; i++) for (int k = 0; k < P; k++) op(k);
+	for (size_t i = 0; i < m; i++) for (size_t k = 0; k < P; k++) op(k);
 	auto t1 = std::chrono::steady_clock::now();
 	return std::chrono::duration<double, std::nano>(t1 - t0).count() / (m * P);
 }
@@ -109,8 +112,8 @@ static double measure(Op op, int P, long loop)
 // variant (prime context as the 4th argument), fs = the rest (llvm baked-p,
 // llvm -var-p, x64 asm). Temp vars are initialized as in check(). Prints one
 // latency row and one throughput row; the trailing ratios are time / base.
-template<class T>
-void benchmark(const char *name, int loop, void (*base)(T&, const T&, const T&), FpOp4 f0, std::initializer_list<FpOp> fs)
+template<class R, class T>
+void benchmark(const char *name, size_t loop, void (*base)(R&, const T&, const T&), FpOp4 f0, std::initializer_list<FpOp> fs)
 {
 	const size_t n = sizeof(T) / sizeof(Fp);
 	cybozu::XorShift rg;
@@ -120,20 +123,36 @@ void benchmark(const char *name, int loop, void (*base)(T&, const T&, const T&),
 		((Fp*)&y)[i].setByCSPRNG(rg);
 	}
 	const Unit *py = (const Unit*)&y;
-	alignas(64) T a[4];
-	auto reset = [&]() { for (int k = 0; k < 4; k++) a[k] = x; };
-	auto run = [&](int P) {
+	const size_t an = 4;
+	T a[an] = {};
+	R dst[an] = {};
+	std::conditional_t<sizeof(R) == sizeof(T), T, R> *b;
+	if constexpr (sizeof(R) == sizeof(T)) {
+		b = a;
+	} else {
+		b = dst;
+	}
+	auto reset = [&]() { for (size_t k = 0; k < an; k++) a[k] = x; };
+	auto run = [&](size_t P) {
 		std::vector<double> v;
-		reset(); v.push_back(measure([&](int k) { base(a[k], a[k], y); }, P, loop));
-		reset(); v.push_back(measure([&](int k) { f0((Unit*)&a[k], (const Unit*)&a[k], py, llvm_var_param); }, P, loop));
+		reset(); v.push_back(measure([&](size_t k) { base(b[k], a[k], y); }, P, loop));
+		if (f0) {
+			reset(); v.push_back(measure([&](size_t k) { f0((Unit*)&b[k], (const Unit*)&a[k], py, llvm_var_param); }, P, loop));
+		} else {
+			v.push_back(0);
+		}
 		for (FpOp f : fs) {
-			reset(); v.push_back(measure([&](int k) { f((Unit*)&a[k], (const Unit*)&a[k], py); }, P, loop));
+			if (!f) {
+				v.push_back(0);
+				continue;
+			}
+			reset(); v.push_back(measure([&](size_t k) { f((Unit*)&b[k], (const Unit*)&a[k], py); }, P, loop));
 		}
 		volatile Unit sink = ((const Unit*)&a[0])[0]; (void)sink;
 		return v;
 	};
 	auto printRow = [&](const char *mode, const std::vector<double>& v) {
-		printf("%-5s %-11s", name, mode);
+		printf("%-7s %-11s", name, mode);
 		for (size_t i = 0; i < v.size(); i++) {
 			char buf[64];
 			if (i == 0) snprintf(buf, sizeof(buf), "%.3f", v[i]); // base
@@ -149,9 +168,10 @@ void benchmark(const char *name, int loop, void (*base)(T&, const T&, const T&),
 static const int TEST_MODE = 1<<0;
 static const int BENCH_MODE = 1<<1;
 
-template<class T>
-void check_and_bench(int mode, const char *name, int loop, void (*base)(T&, const T&, const T&), FpOp4 f0, std::initializer_list<FpOp> fs)
+template<class R, class T>
+void check_and_bench(int mode, const char *name, size_t loop, void (*base)(R&, const T&, const T&), FpOp4 f0, std::initializer_list<FpOp> fs)
 {
+	static_assert(sizeof(R) >= sizeof(T), "size error");
 	if (mode & TEST_MODE) check(name, base, f0, fs);
 	if (mode & BENCH_MODE) benchmark(name, loop, base, f0, fs);
 }
@@ -160,7 +180,7 @@ int main(int argc, char *argv[]) {
 	int mode;
 	cybozu::Option opt;
 	std::vector<std::string> vs;
-	opt.appendVec(&vs, "set", ": select from {add,sub,add2,sub2,mul}");
+	opt.appendVec(&vs, "set", ": select from {add,sub,add2,sub2,mul,mulPre}");
 	opt.appendOpt(&mode, TEST_MODE | BENCH_MODE, "mode", ": test(1), bench(2), both(3), default(3)");
 	opt.appendHelp("h");
 	if (!opt.parse(argc, argv)) {
@@ -181,11 +201,16 @@ int main(int argc, char *argv[]) {
 
 	if (mode & BENCH_MODE) {
 		printf("unit: ns/op (smaller is faster); base = mcl, (Nx) = time / base\n");
-		printf("%-5s %-11s %15s %15s %15s %15s %15s %15s\n",
+		printf("%-7s %-11s %15s %15s %15s %15s %15s %15s\n",
 			"op", "mode", "base", "argp", "llvm", "var", "x64", "x64woadx");
 	}
-	const int C = 200000000;
-	const int C2 = 50000000;
+#ifdef NDEBUG
+	const size_t C = 200000000;
+	const size_t C2 = 50000000;
+#else
+	const size_t C = 100;
+	const size_t C2 = 100;
+#endif
 	if (ss.empty() || ss.find("add") != ss.end()) {
 		check_and_bench(mode, "add", C, Fp::add, llvm_argp_add, {llvm_add, llvm_var_add, x64_add});
 	}
@@ -200,5 +225,8 @@ int main(int argc, char *argv[]) {
 	}
 	if (ss.empty() || ss.find("mul") != ss.end()) {
 		check_and_bench(mode, "mul", C2, Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul, x64_mul_wo_adx});
+	}
+	if (ss.empty() || ss.find("mulPre") != ss.end()) {
+		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, nullptr, {nullptr, nullptr, mcl::bint::get_mul(Fp::getOp().N)});
 	}
 }
