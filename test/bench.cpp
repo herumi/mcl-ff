@@ -29,6 +29,34 @@ using namespace mcl::fp;
 typedef void (*FpOp)(uint64_t* z, const uint64_t* x, const uint64_t* y);
 // add/sub/mul with the prime context passed as the 4th argument.
 typedef void (*FpOp4)(uint64_t* z, const uint64_t* x, const uint64_t* y, const uint64_t* p);
+// unary low-level op (e.g. FpDbl -> Fp reduction): 2 raw arguments (z, xy).
+typedef void (*FpOp1)(uint64_t* z, const uint64_t* xy);
+
+// Number of raw pointer arguments a low-level function pointer takes.
+// FpOp/FpOp4-like types have 3-4 args (binary op, with/without context
+// pointer); FpOp1-like types have 2 args (unary op).
+template<class F> struct RawArity;
+template<class Ret, class... Args>
+struct RawArity<Ret(*)(Args...)> {
+	static constexpr size_t value = sizeof...(Args);
+};
+
+// Result/Arg types and arity (2 = binary op(R&,const T&,const T&), 1 = unary
+// op(R&,const T&)) of a high-level base function pointer such as Fp::add,
+// FpDbl::mulPre, or FpDbl::mod.
+template<class F> struct BaseTraits;
+template<class R, class T>
+struct BaseTraits<void(*)(R&, const T&, const T&)> {
+	using Result = R;
+	using Arg = T;
+	static constexpr int arity = 2;
+};
+template<class R, class T>
+struct BaseTraits<void(*)(R&, const T&)> {
+	using Result = R;
+	using Arg = T;
+	static constexpr int arity = 1;
+};
 
 extern "C" {
 	const uint8_t* llvm_get_prime();
@@ -72,10 +100,22 @@ void initRand(Fp2& x, T& rg)
 	x.b.setByCSPRNG(rg);
 }
 
-
-template<class R, class T>
-void check(const char *name, void (*f)(R& x, const T& y, const T& z), FpOp4 f0, std::initializer_list<FpOp> fs)
+template<class T>
+void initRand(FpDbl& x, T& rg)
 {
+	Fp x0, x1;
+	initRand(x0, rg);
+	initRand(x1, rg);
+	FpDbl::mulPre(x, x0, x1);
+}
+
+
+template<class F, class LowOp>
+void check(const char *name, F f, FpOp4 f0, std::initializer_list<LowOp> fs)
+{
+	using BT = BaseTraits<F>;
+	using R = typename BT::Result;
+	using T = typename BT::Arg;
 	cybozu::XorShift rg;
 	T x, y;
 	R z, z0;
@@ -84,7 +124,11 @@ void check(const char *name, void (*f)(R& x, const T& y, const T& z), FpOp4 f0, 
 	for (int i = 0; i < 100; i++) {
 		initRand(x, rg);
 		initRand(y, rg);
-		f(z, x, y);
+		if constexpr (BT::arity == 2) {
+			f(z, x, y);
+		} else {
+			f(z, x);
+		}
 		if (f0) {
 			f0((Unit*)&z0, px, py, llvm_var_param);
 			if (z != z0) {
@@ -93,9 +137,13 @@ void check(const char *name, void (*f)(R& x, const T& y, const T& z), FpOp4 f0, 
 			}
 		}
 		int idx = 0;
-		for (FpOp f1 : fs) {
+		for (LowOp f1 : fs) {
 			if (!f1) continue;
-			f1((Unit*)&z0, px, py);
+			if constexpr (RawArity<LowOp>::value == 3) {
+				f1((Unit*)&z0, px, py);
+			} else {
+				f1((Unit*)&z0, px);
+			}
 			if (z != z0) {
 				fprintf(stderr, "ERR %s f1[%d]\n", name, idx);
 				exit(1);
@@ -136,24 +184,38 @@ void printRow(const char *name, const char *mode, const std::vector<double>& v) 
 // individual measurement; pass a no-op when b/a don't alias (nothing to
 // restore), or an actual reset when they do (b[k] overwrites a[k], so a[k]
 // must be restored before the next implementation runs).
-template<class R, class T, class Reset>
+// base may be a binary op(R&,const T&,const T&) or a unary op(R&,const T&);
+// each fs element may likewise be a 3-arg (z,x,y) or 2-arg (z,xy) raw
+// function pointer -- arity is detected via BaseTraits/RawArity.
+template<class R, class T, class Reset, class F, class LowOp>
 std::vector<double> measureRound(R *b, T *a, const T& y, size_t P, size_t loop,
-	void (*base)(R&, const T&, const T&), FpOp4 f0, std::initializer_list<FpOp> fs, Reset reset)
+	F base, FpOp4 f0, std::initializer_list<LowOp> fs, Reset reset)
 {
+	using BT = BaseTraits<F>;
 	const Unit *py = (const Unit*)&y;
 	std::vector<double> v;
-	reset(); v.push_back(measure([&](size_t k) { base(b[k], a[k], y); }, P, loop));
+	reset();
+	if constexpr (BT::arity == 2) {
+		v.push_back(measure([&](size_t k) { base(b[k], a[k], y); }, P, loop));
+	} else {
+		v.push_back(measure([&](size_t k) { base(b[k], a[k]); }, P, loop));
+	}
 	if (f0) {
 		reset(); v.push_back(measure([&](size_t k) { f0((Unit*)&b[k], (const Unit*)&a[k], py, llvm_var_param); }, P, loop));
 	} else {
 		v.push_back(0);
 	}
-	for (FpOp f : fs) {
+	for (LowOp f : fs) {
 		if (!f) {
 			v.push_back(0);
 			continue;
 		}
-		reset(); v.push_back(measure([&](size_t k) { f((Unit*)&b[k], (const Unit*)&a[k], py); }, P, loop));
+		reset();
+		if constexpr (RawArity<LowOp>::value == 3) {
+			v.push_back(measure([&](size_t k) { f((Unit*)&b[k], (const Unit*)&a[k], py); }, P, loop));
+		} else {
+			v.push_back(measure([&](size_t k) { f((Unit*)&b[k], (const Unit*)&a[k]); }, P, loop));
+		}
 	}
 	volatile Unit sink = ((const Unit*)&b[0])[0]; (void)sink;
 	return v;
@@ -162,12 +224,16 @@ std::vector<double> measureRound(R *b, T *a, const T& y, size_t P, size_t loop,
 // R == T: the result can be fed back as the next input, so the chained
 // calls form a true serial dependency chain, and both latency (P=1) and
 // throughput (P=4) are meaningful.
-// R != T (e.g. FpDbl = Fp x Fp for mulPre): the result cannot be fed back
-// as the next input, so there is no dependency chain to measure; only
-// throughput (P=4, independent streams) is meaningful.
-template<class R, class T>
-void benchmark(const char *name, size_t loop, void (*base)(R&, const T&, const T&), FpOp4 f0, std::initializer_list<FpOp> fs)
+// R != T (e.g. FpDbl = Fp x Fp for mulPre, or Fp = mod(FpDbl) for mod): the
+// result cannot be fed back as the next input, so there is no dependency
+// chain to measure; only throughput (P=4, independent streams) is
+// meaningful.
+template<class F, class LowOp>
+void benchmark(const char *name, size_t loop, F base, FpOp4 f0, std::initializer_list<LowOp> fs)
 {
+	using BT = BaseTraits<F>;
+	using R = typename BT::Result;
+	using T = typename BT::Arg;
 	cybozu::XorShift rg;
 	T x, y;
 	initRand(x, rg);
@@ -189,10 +255,9 @@ void benchmark(const char *name, size_t loop, void (*base)(R&, const T&, const T
 static const int TEST_MODE = 1<<0;
 static const int BENCH_MODE = 1<<1;
 
-template<class R, class T>
-void check_and_bench(int mode, const char *name, size_t loop, void (*base)(R&, const T&, const T&), FpOp4 f0, std::initializer_list<FpOp> fs)
+template<class F, class LowOp>
+void check_and_bench(int mode, const char *name, size_t loop, F base, FpOp4 f0, std::initializer_list<LowOp> fs)
 {
-	static_assert(sizeof(R) >= sizeof(T), "size error");
 	if (mode & TEST_MODE) check(name, base, f0, fs);
 	if (mode & BENCH_MODE) benchmark(name, loop, base, f0, fs);
 }
@@ -201,7 +266,7 @@ int main(int argc, char *argv[]) {
 	int mode;
 	cybozu::Option opt;
 	std::vector<std::string> vs;
-	opt.appendVec(&vs, "set", ": select from {add,sub,add2,sub2,mul,mulPre}");
+	opt.appendVec(&vs, "set", ": select from {add,sub,add2,sub2,mul,mulPre,mod}");
 	opt.appendOpt(&mode, TEST_MODE | BENCH_MODE, "mode", ": test(1), bench(2), both(3), default(3)");
 	opt.appendHelp("h");
 	if (!opt.parse(argc, argv)) {
@@ -248,6 +313,9 @@ int main(int argc, char *argv[]) {
 		check_and_bench(mode, "mul", C2, Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul, x64_mul_wo_adx});
 	}
 	if (ss.empty() || ss.find("mulPre") != ss.end()) {
-		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, nullptr, {nullptr, nullptr, mcl::bint::get_mul(Fp::getOp().N)});
+		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, nullptr, std::initializer_list<FpOp>{nullptr, nullptr, mcl::bint::get_mul(Fp::getOp().N)});
+	}
+	if (ss.empty() || ss.find("mod") != ss.end()) {
+		check_and_bench(mode, "mod", C2, FpDbl::mod, nullptr, std::initializer_list<FpOp>{nullptr, nullptr, nullptr});
 	}
 }
