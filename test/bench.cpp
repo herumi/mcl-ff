@@ -58,21 +58,31 @@ extern "C" {
 	void x64_mul_wo_adx(uint64_t*, const uint64_t*, const uint64_t*);
 }
 
+template<class T>
+void initRand(Fp& x, T& rg)
+{
+	x.setByCSPRNG(rg);
+}
+
+template<class T>
+void initRand(Fp2& x, T& rg)
+{
+	x.a.setByCSPRNG(rg);
+	x.b.setByCSPRNG(rg);
+}
+
 
 template<class R, class T>
 void check(const char *name, void (*f)(R& x, const T& y, const T& z), FpOp4 f0, std::initializer_list<FpOp> fs)
 {
-	const size_t n = sizeof(T) / sizeof(Fp);
 	cybozu::XorShift rg;
 	T x, y;
 	R z, z0;
 	const Unit *px = (const Unit*)&x;
 	const Unit *py = (const Unit*)&y;
-	for (int j = 0; j < 100; j++) {
-		for (size_t i = 0; i < n; i++) {
-			((Fp*)&x)[i].setByCSPRNG(rg);
-			((Fp*)&y)[i].setByCSPRNG(rg);
-		}
+	for (int i = 0; i < 100; i++) {
+		initRand(x, rg);
+		initRand(y, rg);
 		f(z, x, y);
 		if (f0) {
 			f0((Unit*)&z0, px, py, llvm_var_param);
@@ -108,20 +118,24 @@ static double measure(Op op, size_t P, size_t loop)
 	return std::chrono::duration<double, std::nano>(t1 - t0).count() / (m * P);
 }
 
-// Bench like check(): base = mcl's {Fp,Fp2}::{add,sub,mul}, f0 = the -arg-p
-// variant (prime context as the 4th argument), fs = the rest (llvm baked-p,
-// llvm -var-p, x64 asm). Temp vars are initialized as in check(). Prints one
-// latency row and one throughput row; the trailing ratios are time / base.
+void printRow(const char *name, const char *mode, const std::vector<double>& v) {
+	printf("%-7s %-11s", name, mode);
+	for (size_t i = 0; i < v.size(); i++) {
+		char buf[64];
+		if (i == 0) snprintf(buf, sizeof(buf), "%.3f", v[i]); // base
+		else snprintf(buf, sizeof(buf), "%.3f(%.2fx)", v[i], v[i] / v[0]);
+		printf(" %15s", buf);
+	}
+	printf("\n");
+}
+
 template<class R, class T>
 void benchmark(const char *name, size_t loop, void (*base)(R&, const T&, const T&), FpOp4 f0, std::initializer_list<FpOp> fs)
 {
-	const size_t n = sizeof(T) / sizeof(Fp);
 	cybozu::XorShift rg;
 	T x, y;
-	for (size_t i = 0; i < n; i++) {
-		((Fp*)&x)[i].setByCSPRNG(rg);
-		((Fp*)&y)[i].setByCSPRNG(rg);
-	}
+	initRand(x, rg);
+	initRand(y, rg);
 	const Unit *py = (const Unit*)&y;
 	const size_t an = 4;
 	T a[an] = {};
@@ -151,18 +165,8 @@ void benchmark(const char *name, size_t loop, void (*base)(R&, const T&, const T
 		volatile Unit sink = ((const Unit*)&a[0])[0]; (void)sink;
 		return v;
 	};
-	auto printRow = [&](const char *mode, const std::vector<double>& v) {
-		printf("%-7s %-11s", name, mode);
-		for (size_t i = 0; i < v.size(); i++) {
-			char buf[64];
-			if (i == 0) snprintf(buf, sizeof(buf), "%.3f", v[i]); // base
-			else snprintf(buf, sizeof(buf), "%.3f(%.2fx)", v[i], v[i] / v[0]);
-			printf(" %15s", buf);
-		}
-		printf("\n");
-	};
-	printRow("latency", run(1));
-	printRow("throughput", run(4));
+	printRow(name, "latency", run(1));
+	printRow(name, "throughput", run(4));
 }
 
 static const int TEST_MODE = 1<<0;
