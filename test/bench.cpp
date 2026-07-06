@@ -15,6 +15,7 @@
 #include <chrono>
 #include <initializer_list>
 #include <vector>
+#include <type_traits>
 #include <mcl_fp.h>
 #include <mcl/fp_def.hpp>
 #include <mcl/fp_tower.hpp>
@@ -129,6 +130,41 @@ void printRow(const char *name, const char *mode, const std::vector<double>& v) 
 	printf("\n");
 }
 
+// Run one measurement round (P streams): time base/f0/fs in turn, each
+// writing results into b[k] from inputs a[k]/y, collecting one value per
+// implementation into the returned vector. reset() is invoked before each
+// individual measurement; pass a no-op when b/a don't alias (nothing to
+// restore), or an actual reset when they do (b[k] overwrites a[k], so a[k]
+// must be restored before the next implementation runs).
+template<class R, class T, class Reset>
+std::vector<double> measureRound(R *b, T *a, const T& y, size_t P, size_t loop,
+	void (*base)(R&, const T&, const T&), FpOp4 f0, std::initializer_list<FpOp> fs, Reset reset)
+{
+	const Unit *py = (const Unit*)&y;
+	std::vector<double> v;
+	reset(); v.push_back(measure([&](size_t k) { base(b[k], a[k], y); }, P, loop));
+	if (f0) {
+		reset(); v.push_back(measure([&](size_t k) { f0((Unit*)&b[k], (const Unit*)&a[k], py, llvm_var_param); }, P, loop));
+	} else {
+		v.push_back(0);
+	}
+	for (FpOp f : fs) {
+		if (!f) {
+			v.push_back(0);
+			continue;
+		}
+		reset(); v.push_back(measure([&](size_t k) { f((Unit*)&b[k], (const Unit*)&a[k], py); }, P, loop));
+	}
+	volatile Unit sink = ((const Unit*)&b[0])[0]; (void)sink;
+	return v;
+}
+
+// R == T: the result can be fed back as the next input, so the chained
+// calls form a true serial dependency chain, and both latency (P=1) and
+// throughput (P=4) are meaningful.
+// R != T (e.g. FpDbl = Fp x Fp for mulPre): the result cannot be fed back
+// as the next input, so there is no dependency chain to measure; only
+// throughput (P=4, independent streams) is meaningful.
 template<class R, class T>
 void benchmark(const char *name, size_t loop, void (*base)(R&, const T&, const T&), FpOp4 f0, std::initializer_list<FpOp> fs)
 {
@@ -136,37 +172,18 @@ void benchmark(const char *name, size_t loop, void (*base)(R&, const T&, const T
 	T x, y;
 	initRand(x, rg);
 	initRand(y, rg);
-	const Unit *py = (const Unit*)&y;
 	const size_t an = 4;
 	T a[an] = {};
-	R dst[an] = {};
-	std::conditional_t<sizeof(R) == sizeof(T), T, R> *b;
-	if constexpr (sizeof(R) == sizeof(T)) {
-		b = a;
+	for (size_t k = 0; k < an; k++) a[k] = x;
+	if constexpr (std::is_same_v<R, T>) {
+		auto reset = [&]() { for (size_t k = 0; k < an; k++) a[k] = x; };
+		auto run = [&](size_t P) { return measureRound(a, a, y, P, loop, base, f0, fs, reset); };
+		printRow(name, "latency", run(1));
+		printRow(name, "throughput", run(4));
 	} else {
-		b = dst;
+		R dst[an] = {};
+		printRow(name, "throughput", measureRound(dst, a, y, 4, loop, base, f0, fs, [](){}));
 	}
-	auto reset = [&]() { for (size_t k = 0; k < an; k++) a[k] = x; };
-	auto run = [&](size_t P) {
-		std::vector<double> v;
-		reset(); v.push_back(measure([&](size_t k) { base(b[k], a[k], y); }, P, loop));
-		if (f0) {
-			reset(); v.push_back(measure([&](size_t k) { f0((Unit*)&b[k], (const Unit*)&a[k], py, llvm_var_param); }, P, loop));
-		} else {
-			v.push_back(0);
-		}
-		for (FpOp f : fs) {
-			if (!f) {
-				v.push_back(0);
-				continue;
-			}
-			reset(); v.push_back(measure([&](size_t k) { f((Unit*)&b[k], (const Unit*)&a[k], py); }, P, loop));
-		}
-		volatile Unit sink = ((const Unit*)&a[0])[0]; (void)sink;
-		return v;
-	};
-	printRow(name, "latency", run(1));
-	printRow(name, "throughput", run(4));
 }
 
 static const int TEST_MODE = 1<<0;
