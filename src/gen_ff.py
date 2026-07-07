@@ -60,18 +60,6 @@ def gen_once():
   gen_extractHigh()
   gen_mulPos(mulUU)
 
-# Derive an i64* to p[0] from the prime-data global.
-# const mode: dataVar is the wide p constant; ip is an immediate (ipBase None).
-# -var-p mode: dataVar is [N+1 x i64] laid out as {ip, p[N]} (same memory layout
-# as mcl's struct { uint64_t ip; uint64_t p[N]; }); ipBase points to ip (elem 0).
-def derivePtr(dataVar, var_p):
-  if var_p:
-    base = bitcast(dataVar, unit)
-    pp = getelementptr(base, 1)
-    return pp, base
-  pp = bitcast(dataVar, unit)
-  return pp, None
-
 def gen_add_raw(x, y, p, isFullBit):
   bit = x.bit
   if isFullBit:
@@ -90,22 +78,14 @@ def gen_add_raw(x, y, p, isFullBit):
     x = select(c, x, y)
   return x
 
-def gen_fp_add(name, N, dataVar, var_p, arg_p=False):
+def gen_fp_add(name, N, dataVar):
   bit = unit * N
   resetGlobalIdx();
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
-  args = [pz, px, py]
-  if arg_p:
-    pParam = IntPtr(unit)
-    args.append(pParam)
-  with Function(name, Void, *args):
-    if arg_p:
-      # 4th argument is a pointer to { ip, p[N] }; add only needs p (element 1).
-      pp = getelementptr(pParam, 1)
-    else:
-      pp, _ = derivePtr(dataVar, var_p)
+  with Function(name, Void, pz, px, py):
+    pp = bitcast(dataVar, unit)
     # volatile: keep the operand loads unfused so store-forwarded inputs
     # (common in dependency chains) do not pay the folded-load latency.
     x = loadN(px, N, volatile=True)
@@ -115,22 +95,14 @@ def gen_fp_add(name, N, dataVar, var_p, arg_p=False):
     storeN(x, pz)
     ret(Void)
 
-def gen_fp2_add(name, N, dataVar, var_p, offset, arg_p=False):
+def gen_fp2_add(name, N, dataVar, offset):
   bit = unit * N
   resetGlobalIdx();
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
-  args = [pz, px, py]
-  if arg_p:
-    pParam = IntPtr(unit)
-    args.append(pParam)
-  with Function(name, Void, *args):
-    if arg_p:
-      # 4th argument is a pointer to { ip, p[N] }; add only needs p (element 1).
-      pp = getelementptr(pParam, 1)
-    else:
-      pp, _ = derivePtr(dataVar, var_p)
+  with Function(name, Void, pz, px, py):
+    pp = bitcast(dataVar, unit)
     p = loadN(pp, N)
     for i in range(2):
       x = loadN(px, N, offset=i*offset, volatile=True)
@@ -155,24 +127,6 @@ def makeSubTbl(pre, mont):
   tbl = makeVar(f'{pre}sub_tbl', unit, v, static=False, const=False, align=64)
   return (tbl, Npad)
 
-# Reduction via a value select; kept for -arg-p where p is a runtime argument
-# and no table can be baked. clang lowers the select to an and-mask sequence.
-def gen_sub_raw(x, y, p, isFullBit):
-  bit = x.bit
-  if isFullBit:
-    x = zext(x, bit + unit)
-    y = zext(y, bit + unit)
-    v = sub(x, y)
-    c = trunc(lshr(v, bit), 1)
-    v = trunc(v, bit)
-  else:
-    v = sub(x, y)
-    c = trunc(lshr(v, bit - 1), 1)
-  # add p back when the subtraction borrowed (x < y), else add zero.
-  c = select(c, p, Imm(0, bit))
-  v = add(v, c)
-  return v
-
 # Reduction via the {zero, p} table indexed by the borrow. The variable-index
 # GEP cannot be rewritten into a select of the loaded values (the table is
 # writable memory), so the conditional +p lowers to an add/adc chain with
@@ -194,58 +148,34 @@ def gen_sub_raw_tbl(x, y, ptbl, Npad, isFullBit):
   v = add(v, p)
   return v
 
-def gen_fp_sub(name, N, subTbl, arg_p=False):
+def gen_fp_sub(name, N, subTbl):
   bit = unit * N
   resetGlobalIdx();
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
-  args = [pz, px, py]
-  if arg_p:
-    pParam = IntPtr(unit)
-    args.append(pParam)
-  with Function(name, Void, *args):
-    if arg_p:
-      # 4th argument is a pointer to { ip, p[N] }; sub only needs p (element 1).
-      pp = getelementptr(pParam, 1)
-    else:
-      tbl, Npad = subTbl
-      ptbl = bitcast(tbl, unit)
+  with Function(name, Void, pz, px, py):
+    tbl, Npad = subTbl
+    ptbl = bitcast(tbl, unit)
     x = loadN(px, N, volatile=True)
     y = loadN(py, N, volatile=True)
-    if arg_p:
-      p = loadN(pp, N)
-      v = gen_sub_raw(x, y, p, mont.isFullBit)
-    else:
-      v = gen_sub_raw_tbl(x, y, ptbl, Npad, mont.isFullBit)
+    v = gen_sub_raw_tbl(x, y, ptbl, Npad, mont.isFullBit)
     storeN(v, pz)
     ret(Void)
 
-def gen_fp2_sub(name, N, subTbl, offset, arg_p=False):
+def gen_fp2_sub(name, N, subTbl, offset):
   bit = unit * N
   resetGlobalIdx();
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
-  args = [pz, px, py]
-  if arg_p:
-    pParam = IntPtr(unit)
-    args.append(pParam)
-  with Function(name, Void, *args):
-    if arg_p:
-      # 4th argument is a pointer to { ip, p[N] }; sub only needs p (element 1).
-      pp = getelementptr(pParam, 1)
-      p = loadN(pp, N)
-    else:
-      tbl, Npad = subTbl
-      ptbl = bitcast(tbl, unit)
+  with Function(name, Void, pz, px, py):
+    tbl, Npad = subTbl
+    ptbl = bitcast(tbl, unit)
     for i in range(2):
       x = loadN(px, N, offset=i*offset, volatile=True)
       y = loadN(py, N, offset=i*offset, volatile=True)
-      if arg_p:
-        v = gen_sub_raw(x, y, p, mont.isFullBit)
-      else:
-        v = gen_sub_raw_tbl(x, y, ptbl, Npad, mont.isFullBit)
+      v = gen_sub_raw_tbl(x, y, ptbl, Npad, mont.isFullBit)
       storeN(v, pz, offset=i*offset)
 
     ret(Void)
@@ -286,7 +216,7 @@ def gen_mulUnit(name, N, mulPos, extractHigh):
     ret(z)
   return f
 
-def gen_mul(name, mont, dataVar, mulUnit, var_p, arg_p=False):
+def gen_mul(name, mont, dataVar, mulUnit):
   N = mont.pn
   bit = unit * N
   bu = bit + unit
@@ -295,23 +225,9 @@ def gen_mul(name, mont, dataVar, mulUnit, var_p, arg_p=False):
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
-  args = [pz, px, py]
-  if arg_p:
-    # 4th argument points to struct { uint64_t ip; uint64_t p[N]; }, i.e. the
-    # same [ip, p[N]] layout as -var-p but passed in by the caller instead of
-    # referenced from a fixed global.
-    pParam = IntPtr(unit)
-    args.append(pParam)
-  with Function(name, Void, *args):
-    if arg_p:
-      ipval = load(pParam)
-      pp = getelementptr(pParam, 1)
-    else:
-      pp, ipBase = derivePtr(dataVar, var_p)
-      if var_p:
-        ipval = load(ipBase)
-      else:
-        ipval = mont.ip
+  with Function(name, Void, pz, px, py):
+    pp = bitcast(dataVar, unit)
+    ipval = mont.ip
     if mont.isFullBit:
       for i in range(N):
         y = load(getelementptr(py, i))
@@ -379,8 +295,6 @@ def main():
   parser.add_argument('-add', action='store_true', default=False, help='add add function')
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
   parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
-  parser.add_argument('-var-p', dest='var_p', action='store_true', default=False, help='reference p/ip from a runtime [ip, p[N]] array instead of immediates')
-  parser.add_argument('-arg-p', dest='arg_p', action='store_true', default=False, help='pass a pointer to struct { uint64_t ip; uint64_t p[N]; } as the 4th argument of add/sub/mul instead of using a global')
 
   opt = parser.parse_args()
   if opt.n == 0:
@@ -400,24 +314,19 @@ def main():
     opt.mul = True
     showPrototype()
 
-  if opt.var_p:
-    mask = (1 << unit) - 1
-    limbs = [(mont.p >> (unit * i)) & mask for i in range(mont.pn)]
-    dataVar = makeVar(f'{opt.pre}param', unit, [mont.ip] + limbs, static=False, const=False)
-  else:
-    dataVar = makeVar('p', mont.bit, mont.p, const=True, static=True)
-    makeVar('ip', unit, mont.ip, const=True, static=True)
+  dataVar = makeVar('p', mont.bit, mont.p, const=True, static=True)
+  makeVar('ip', unit, mont.ip, const=True, static=True)
   pStr = makeStrVar('pStr', hex(opt.p))
 
   gen_get_prime(f'{opt.pre}get_prime', pStr)
 
   if opt.add:
-    gen_fp_add(f'{opt.pre}add', mont.pn, dataVar, opt.var_p, opt.arg_p)
-    gen_fp2_add(f'{opt.pre2}add', mont.pn, dataVar, opt.var_p, opt.offset, opt.arg_p)
+    gen_fp_add(f'{opt.pre}add', mont.pn, dataVar)
+    gen_fp2_add(f'{opt.pre2}add', mont.pn, dataVar, opt.offset)
   if opt.sub:
-    subTbl = None if opt.arg_p else makeSubTbl(opt.pre, mont)
-    gen_fp_sub(f'{opt.pre}sub', mont.pn, subTbl, opt.arg_p)
-    gen_fp2_sub(f'{opt.pre2}sub', mont.pn, subTbl, opt.offset, opt.arg_p)
+    subTbl = makeSubTbl(opt.pre, mont)
+    gen_fp_sub(f'{opt.pre}sub', mont.pn, subTbl)
+    gen_fp2_sub(f'{opt.pre2}sub', mont.pn, subTbl, opt.offset)
 
   mulUU = gen_mulUU()
   extractHigh = gen_extractHigh()
@@ -425,7 +334,7 @@ def main():
   mulUnit = gen_mulUnit(f'{opt.pre}mulUnit', mont.pn, mulPos, extractHigh)
 
   if opt.mul:
-    gen_mul(f'{opt.pre}mul', mont, dataVar, mulUnit, opt.var_p, opt.arg_p)
+    gen_mul(f'{opt.pre}mul', mont, dataVar, mulUnit)
 
   term()
 

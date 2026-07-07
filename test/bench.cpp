@@ -2,11 +2,6 @@
 // gen_ff_x64.py (x64 asm) within a single executable.
 //
 // Both generators emit under distinct prefixes (llvm_ / x64_) so they coexist.
-// llvm_var_mul is the -var-p variant: p/ip are read from a runtime array
-// (llvm_var_param) instead of being baked in as immediates.
-// llvm_argp_mul is the -arg-p variant: a pointer to struct { uint64_t ip;
-// uint64_t p[N]; } is passed as the 4th argument. It reuses llvm_var_param,
-// which has exactly that [ip, p[N]] layout, so it runs on identical data.
 // Built and run via the `bench` target in the Makefile.
 #include <cstdint>
 #include <cstdio>
@@ -27,14 +22,11 @@ using namespace mcl;
 using namespace mcl::fp;
 
 typedef void (*FpOp)(uint64_t* z, const uint64_t* x, const uint64_t* y);
-// add/sub/mul with the prime context passed as the 4th argument.
-typedef void (*FpOp4)(uint64_t* z, const uint64_t* x, const uint64_t* y, const uint64_t* p);
 // unary low-level op (e.g. FpDbl -> Fp reduction): 2 raw arguments (z, xy).
 typedef void (*FpOp1)(uint64_t* z, const uint64_t* xy);
 
 // Number of raw pointer arguments a low-level function pointer takes.
-// FpOp/FpOp4-like types have 3-4 args (binary op, with/without context
-// pointer); FpOp1-like types have 2 args (unary op).
+// FpOp-like types have 3 args (binary op); FpOp1-like types have 2 (unary op).
 template<class F> struct RawArity;
 template<class Ret, class... Args>
 struct RawArity<Ret(*)(Args...)> {
@@ -65,19 +57,6 @@ extern "C" {
 	void llvm_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm2_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_mul(uint64_t*, const uint64_t*, const uint64_t*);
-	void llvm_var_add(uint64_t*, const uint64_t*, const uint64_t*);
-	void llvm_var2_add(uint64_t*, const uint64_t*, const uint64_t*);
-	void llvm_var_sub(uint64_t*, const uint64_t*, const uint64_t*);
-	void llvm_var2_sub(uint64_t*, const uint64_t*, const uint64_t*);
-	void llvm_var_mul(uint64_t*, const uint64_t*, const uint64_t*);
-	void llvm_argp_add(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
-	void llvm_argp2_add(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
-	void llvm_argp_sub(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
-	void llvm_argp2_sub(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
-	void llvm_argp_mul(uint64_t*, const uint64_t*, const uint64_t*, const uint64_t*);
-	// [ip, p[N]] array emitted by the -var-p generator; same layout as the
-	// struct { uint64_t ip; uint64_t p[N]; } expected by llvm_argp_mul.
-	extern const uint64_t llvm_var_param[];
 	void x64_add(uint64_t*, const uint64_t*, const uint64_t*);
 	void x642_add(uint64_t*, const uint64_t*, const uint64_t*);
 	void x64_sub(uint64_t*, const uint64_t*, const uint64_t*);
@@ -115,7 +94,7 @@ void initRand(FpDbl& x, T& rg)
 
 
 template<class F, class LowOp>
-void check(const char *name, F f, FpOp4 f0, std::initializer_list<LowOp> fs)
+void check(const char *name, F f, std::initializer_list<LowOp> fs)
 {
 	using BT = BaseTraits<F>;
 	using R = typename BT::Result;
@@ -132,13 +111,6 @@ void check(const char *name, F f, FpOp4 f0, std::initializer_list<LowOp> fs)
 			f(z, x, y);
 		} else {
 			f(z, x);
-		}
-		if (f0) {
-			f0((Unit*)&z0, px, py, llvm_var_param);
-			if (z != z0) {
-				fprintf(stderr, "ERR %s f0\n", name);
-				exit(1);
-			}
 		}
 		int idx = 0;
 		for (LowOp f1 : fs) {
@@ -182,7 +154,7 @@ void printRow(const char *name, const char *mode, const std::vector<double>& v) 
 	printf("\n");
 }
 
-// Run one measurement round (P streams): time base/f0/fs in turn, each
+// Run one measurement round (P streams): time base/fs in turn, each
 // writing results into b[k] from inputs a[k]/y, collecting one value per
 // implementation into the returned vector. reset() is invoked before each
 // individual measurement; pass a no-op when b/a don't alias (nothing to
@@ -193,7 +165,7 @@ void printRow(const char *name, const char *mode, const std::vector<double>& v) 
 // function pointer -- arity is detected via BaseTraits/RawArity.
 template<class R, class T, class Reset, class F, class LowOp>
 std::vector<double> measureRound(R *b, T *a, const T& y, size_t P, size_t loop,
-	F base, FpOp4 f0, std::initializer_list<LowOp> fs, Reset reset)
+	F base, std::initializer_list<LowOp> fs, Reset reset)
 {
 	using BT = BaseTraits<F>;
 	const Unit *py = (const Unit*)&y;
@@ -203,11 +175,6 @@ std::vector<double> measureRound(R *b, T *a, const T& y, size_t P, size_t loop,
 		v.push_back(measure([&](size_t k) { base(b[k], a[k], y); }, P, loop));
 	} else {
 		v.push_back(measure([&](size_t k) { base(b[k], a[k]); }, P, loop));
-	}
-	if (f0) {
-		reset(); v.push_back(measure([&](size_t k) { f0((Unit*)&b[k], (const Unit*)&a[k], py, llvm_var_param); }, P, loop));
-	} else {
-		v.push_back(0);
 	}
 	for (LowOp f : fs) {
 		if (!f) {
@@ -233,7 +200,7 @@ std::vector<double> measureRound(R *b, T *a, const T& y, size_t P, size_t loop,
 // chain to measure; only throughput (P=4, independent streams) is
 // meaningful.
 template<class F, class LowOp>
-void benchmark(const char *name, size_t loop, F base, FpOp4 f0, std::initializer_list<LowOp> fs)
+void benchmark(const char *name, size_t loop, F base, std::initializer_list<LowOp> fs)
 {
 	using BT = BaseTraits<F>;
 	using R = typename BT::Result;
@@ -247,12 +214,12 @@ void benchmark(const char *name, size_t loop, F base, FpOp4 f0, std::initializer
 	for (size_t k = 0; k < an; k++) a[k] = x;
 	if constexpr (std::is_same_v<R, T>) {
 		auto reset = [&]() { for (size_t k = 0; k < an; k++) a[k] = x; };
-		auto run = [&](size_t P) { return measureRound(a, a, y, P, loop, base, f0, fs, reset); };
+		auto run = [&](size_t P) { return measureRound(a, a, y, P, loop, base, fs, reset); };
 		printRow(name, "latency", run(1));
 		printRow(name, "throughput", run(4));
 	} else {
 		R dst[an] = {};
-		printRow(name, "throughput", measureRound(dst, a, y, 4, loop, base, f0, fs, [](){}));
+		printRow(name, "throughput", measureRound(dst, a, y, 4, loop, base, fs, [](){}));
 	}
 }
 
@@ -260,10 +227,10 @@ static const int TEST_MODE = 1<<0;
 static const int BENCH_MODE = 1<<1;
 
 template<class F, class LowOp>
-void check_and_bench(int mode, const char *name, size_t loop, F base, FpOp4 f0, std::initializer_list<LowOp> fs)
+void check_and_bench(int mode, const char *name, size_t loop, F base, std::initializer_list<LowOp> fs)
 {
-	if (mode & TEST_MODE) check(name, base, f0, fs);
-	if (mode & BENCH_MODE) benchmark(name, loop, base, f0, fs);
+	if (mode & TEST_MODE) check(name, base, fs);
+	if (mode & BENCH_MODE) benchmark(name, loop, base, fs);
 }
 
 int main(int argc, char *argv[]) {
@@ -291,8 +258,8 @@ int main(int argc, char *argv[]) {
 
 	if (mode & BENCH_MODE) {
 		printf("unit: ns/op (smaller is faster); base = mcl, (Nx) = time / base\n");
-		printf("%-7s %-11s %15s %15s %15s %15s %15s %15s\n",
-			"op", "mode", "base", "argp", "llvm", "var", "x64", "x64woadx");
+		printf("%-7s %-11s %15s %15s %15s %15s\n",
+			"op", "mode", "base", "llvm", "x64", "x64woadx");
 	}
 #ifdef NDEBUG
 	const size_t C = 200000000;
@@ -302,25 +269,25 @@ int main(int argc, char *argv[]) {
 	const size_t C2 = 100;
 #endif
 	if (ss.empty() || ss.find("add") != ss.end()) {
-		check_and_bench(mode, "add", C, Fp::add, llvm_argp_add, {llvm_add, llvm_var_add, x64_add});
+		check_and_bench(mode, "add", C, Fp::add, {llvm_add, x64_add});
 	}
 	if (ss.empty() || ss.find("add") != ss.end()) {
-		check_and_bench(mode, "sub", C, Fp::sub, llvm_argp_sub, {llvm_sub, llvm_var_sub, x64_sub});
+		check_and_bench(mode, "sub", C, Fp::sub, {llvm_sub, x64_sub});
 	}
 	if (ss.empty() || ss.find("add2") != ss.end()) {
-		check_and_bench(mode, "add2", C, Fp2::add, llvm_argp2_add, {llvm2_add, llvm_var2_add, x642_add});
+		check_and_bench(mode, "add2", C, Fp2::add, {llvm2_add, x642_add});
 	}
 	if (ss.empty() || ss.find("sub2") != ss.end()) {
-		check_and_bench(mode, "sub2", C, Fp2::sub, llvm_argp2_sub, {llvm2_sub, llvm_var2_sub, x642_sub});
+		check_and_bench(mode, "sub2", C, Fp2::sub, {llvm2_sub, x642_sub});
 	}
 	if (ss.empty() || ss.find("mul") != ss.end()) {
-		check_and_bench(mode, "mul", C2, Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul, x64_mul_wo_adx});
+		check_and_bench(mode, "mul", C2, Fp::mul, {llvm_mul, x64_mul, x64_mul_wo_adx});
 	}
 	if (ss.empty() || ss.find("mulPre") != ss.end()) {
-		// var column = raw mcl::bint mul (reference), x64/x64woadx = generated
-		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, nullptr, std::initializer_list<FpOp>{nullptr, mcl::bint::get_mul(Fp::getOp().N), x64_mulPre, x64_mulPre_wo_adx});
+		// llvm column = raw mcl::bint mul (reference), x64/x64woadx = generated
+		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, std::initializer_list<FpOp>{mcl::bint::get_mul(Fp::getOp().N), x64_mulPre, x64_mulPre_wo_adx});
 	}
 	if (ss.empty() || ss.find("mod") != ss.end()) {
-		check_and_bench(mode, "mod", C2, FpDbl::mod, nullptr, std::initializer_list<FpOp>{nullptr, nullptr, nullptr});
+		check_and_bench(mode, "mod", C2, FpDbl::mod, std::initializer_list<FpOp>{nullptr, nullptr});
 	}
 }

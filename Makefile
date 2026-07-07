@@ -90,22 +90,14 @@ test: $(BENCH_EXE)
 # distinct prefixes and compare them within a single executable (test/bench.cpp).
 src/bench_llvm.ll: src/gen_ff.py $(GEN_STAMP)
 	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul > $@
-src/bench_llvm_var.ll: src/gen_ff.py $(GEN_STAMP)
-	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_var_ -add -sub -mul -var-p > $@
-src/bench_llvm_argp.ll: src/gen_ff.py $(GEN_STAMP)
-	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_argp_ -add -sub -mul -arg-p > $@
 src/bench_x64.S: src/gen_ff_x64.py $(GEN_STAMP)
 	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul -mul_wo_adx -mulPre -mulPre_wo_adx > $@
 obj/bench_llvm.o: src/bench_llvm.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
-obj/bench_llvm_var.o: src/bench_llvm_var.ll
-	$(CLANG) -c -o $@ $< $(CFLAGS)
-obj/bench_llvm_argp.o: src/bench_llvm_argp.ll
-	$(CLANG) -c -o $@ $< $(CFLAGS)
 obj/bench_x64.o: src/bench_x64.S
 	$(CXX) -c -o $@ $< -fPIC
-$(BENCH_EXE): test/bench.cpp obj/bench_llvm.o obj/bench_llvm_var.o obj/bench_llvm_argp.o obj/bench_x64.o $(HEADER)
-	$(CXX) -o $@ $< obj/bench_llvm.o obj/bench_llvm_var.o obj/bench_llvm_argp.o obj/bench_x64.o $(CFLAGS) $(MCL_LIB)
+$(BENCH_EXE): test/bench.cpp obj/bench_llvm.o obj/bench_x64.o $(HEADER)
+	$(CXX) -o $@ $< obj/bench_llvm.o obj/bench_x64.o $(CFLAGS) $(MCL_LIB)
 bench: $(BENCH_EXE)
 	$(BENCH_EXE)
 
