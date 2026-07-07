@@ -279,6 +279,36 @@ def gen_mul(name, mont):
       cmovc_pp(pk, keep)
       store_mp(pz, pk)
 
+# One row of schoolbook multiplication with mulx and w/o adx (rdx = y[i]):
+#   A: row = x * y[i]; one add/adc chain combines row[j] = lo[j] + hi[j-1].
+#   B: d = c + row (one chain; d has N+1 limbs, all in registers).
+# x_at(j) gives the operand of x[j]. c is None on the first row (B is skipped).
+# c[j] is None for a limb spilled to S_ct (folded into the chain as adc; such
+# j must be >= 1). All registers of c are released. Returns d (N+1 registers).
+def mulRow_wo_adx(N, x_at, c, S_ct, alloc, release):
+  # A: row = x * y[i]
+  L = [None] * N
+  hi = None
+  for j in range(N):
+    prev = hi
+    hi = alloc()
+    L[j] = alloc()
+    mulx(hi, L[j], x_at(j))
+    if j > 0:
+      add_ex(L[j], prev, j == 1)
+      release(prev)
+  adc(hi, 0) # row[N]
+  # B: d = c + row
+  if c is not None:
+    for j in range(N):
+      if c[j] is None:
+        adc(L[j], S_ct) # the spilled limb of c
+      else:
+        add_ex(L[j], c[j], j == 0)
+        release(c[j])
+    adc(hi, 0)
+  return L + [hi]
+
 # Montgomery mul(x, y) w/mulx and w/o adx(adcx/adox) is faster than w/adx.
 # Loop invariant: the accumulator c (< 2p, N limbs) is in registers except
 # possibly c[N-1] (see below). One iteration (rdx = y[i]):
@@ -301,6 +331,7 @@ def gen_mul_wo_adx(name, mont):
       py = sf.p[2]
       if allInRegs:
         cSpill = None
+        S_ct = None
         pool = sf.t[:]
       else:
         S_pz = ptr(rsp + 0)
@@ -325,37 +356,18 @@ def gen_mul_wo_adx(name, mont):
         else:
           mov(rdx, S_py)
           mov(rdx, ptr(rdx + i * 8)) # rdx = y[i]
-        # A: row = x * y[i]
-        L = [None] * N
-        hi = None
-        for j in range(N):
-          prev = hi
-          hi = alloc()
-          L[j] = alloc()
-          if allInRegs or isFirst:
-            mulx(hi, L[j], ptr(px + j * 8))
-          else:
-            mulx(hi, L[j], S_x(j))
-          if j > 0:
-            add_ex(L[j], prev, j == 1)
-            release(prev)
-        adc(hi, 0) # row[N]
+        if allInRegs or isFirst:
+          x_at = lambda j: ptr(px + j * 8)
+        else:
+          x_at = S_x
+        # A, B: D = c + x * y[i]
+        D = mulRow_wo_adx(N, x_at, c, S_ct, alloc, release)
         if isFirst and not allInRegs:
           for j in range(N):
             mov(rax, ptr(px + j * 8))
             mov(S_x(j), rax)
           release(px)
           release(py)
-        # B: d = c + row
-        if not isFirst:
-          for j in range(N):
-            if j == cSpill:
-              adc(L[j], S_ct)
-            else:
-              add_ex(L[j], c[j], j == 0)
-              release(c[j])
-          adc(hi, 0)
-        D = L + [hi]
         # C: q = d[0] * ip ; c' = (d + q*p)/2^64
         mov(rdx, mont.ip)
         imul(rdx, D[0]) # rdx = q
@@ -400,6 +412,109 @@ def gen_mul_wo_adx(name, mont):
         mov(pz, S_pz)
       store_mp(pz, c)
 
+# mulPre: z[2N] = x[N] * y[N] (schoolbook, no reduction) with adcx/adox rows
+# (mulAdd), i.e. gen_mul without the Montgomery step. After row i, pk[0] is
+# final (= z[i]) and is stored immediately; rotatePack shifts the window.
+# Unlike gen_mul, no final subtraction is needed, so N+3 temps suffice even
+# for N=6 (no spill).
+def gen_mulPre(name, mont):
+  N = mont.pn
+  align(16)
+  with FuncProc(name):
+    with StackFrame(3, N+3, useRDX=True) as sf:
+      pz = sf.p[0]
+      px = sf.p[1]
+      py = sf.p[2]
+      pk = sf.t[0:N+1]
+      t = sf.t[N+1]
+      t2 = sf.t[N+2]
+      for i in range(N):
+        mov(rdx, ptr(py + i * 8))
+        if i == 0:
+          # pk[N..0] = x * y[0]
+          mulPack1(pk, px, t)
+        else:
+          # pk[N..0] = pk[N-1..0] + x * y[i]
+          mulAdd(pk, px, t, t2, True)
+        mov(ptr(pz + i * 8), pk[0]) # z[i] is final after row i
+        pk = rotatePack(pk)
+      # the upper half: z[N..2N-1] = pk[0..N-1]
+      for j in range(N):
+        mov(ptr(pz + (N + j) * 8), pk[j])
+
+# mulPre: z[2N] = x[N] * y[N] (schoolbook, no reduction), built from the same
+# mulx-only rows (mulRow_wo_adx) as gen_mul_wo_adx but without the Montgomery
+# step C. After row i, d[0] is final (= z[i]) and is stored immediately; the
+# remaining N limbs are carried to the next row.
+def gen_mulPre_wo_adx(name, mont):
+  N = mont.pn
+  assert N in (4, 6)
+  align(16)
+  with FuncProc(name):
+    # peak usage: carried c (N regs, one spillable) + row under construction
+    # (N+2 regs); pz/px/py stay pinned when everything fits in the 10 temps.
+    allInRegs = 2*N+2 <= 10
+    with StackFrame(3, 10, useRDX=True, stackSizeByte=0 if allInRegs else (N+3)*8) as sf:
+      pz = sf.p[0]
+      px = sf.p[1]
+      py = sf.p[2]
+      if allInRegs:
+        cSpill = None
+        S_ct = None
+        pool = sf.t[:]
+      else:
+        S_pz = ptr(rsp + 0)
+        S_py = ptr(rsp + 8)
+        cSpill = N-1 # which limb of c to spill; must be >= 1
+        S_ct = ptr(rsp + 16) # c[cSpill] between iterations
+        def S_x(j):
+          return ptr(rsp + 24 + j * 8)
+        mov(S_pz, pz)
+        mov(S_py, py)
+        pool = [pz] + sf.t[:]
+      def alloc():
+        return pool.pop()
+      def release(r):
+        pool.append(r)
+      c = None
+      for i in range(N):
+        isFirst = i == 0
+        isLast = i == N-1
+        if allInRegs or isFirst:
+          mov(rdx, ptr(py + i * 8)) # rdx = y[i]
+        else:
+          mov(rdx, S_py)
+          mov(rdx, ptr(rdx + i * 8)) # rdx = y[i]
+        if allInRegs or isFirst:
+          x_at = lambda j: ptr(px + j * 8)
+        else:
+          x_at = S_x
+        # A, B: d = c + x * y[i]
+        d = mulRow_wo_adx(N, x_at, c, S_ct, alloc, release)
+        if isFirst and not allInRegs:
+          for j in range(N):
+            mov(rax, ptr(px + j * 8))
+            mov(S_x(j), rax)
+          release(px)
+          release(py)
+        if allInRegs:
+          zp = pz
+        else:
+          zp = rax
+          mov(zp, S_pz)
+        mov(ptr(zp + i * 8), d[0]) # z[i] is final after row i
+        release(d[0])
+        c = d[1:]
+        if isLast:
+          # the upper half: z[N..2N-1] = c[0..N-1]
+          for j in range(N):
+            mov(ptr(zp + (N + j) * 8), c[j])
+        elif cSpill is not None:
+          # spill right after it is produced: maximum store-to-load slack
+          mov(S_ct, c[cSpill])
+          release(c[cSpill])
+          c[cSpill] = None
+
 def main():
   parser = getDefaultParser('gen bint')
   parser.add_argument('-p', type=str, default='', help='characteristic of a finite field')
@@ -410,6 +525,8 @@ def main():
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
   parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
   parser.add_argument('-mul_wo_adx', action='store_true', default=False, help='add mul function without adcx/adox (N=4, 6 only)')
+  parser.add_argument('-mulPre', action='store_true', default=False, help='add mulPre function (z[2N] = x*y, no reduction)')
+  parser.add_argument('-mulPre_wo_adx', action='store_true', default=False, help='add mulPre function without adcx/adox (N=4, 6 only)')
   opt = parser.parse_args()
 
   init(opt)
@@ -444,6 +561,10 @@ def main():
   if opt.mul_wo_adx and not mont.isFullBit:
     name = f'{opt.pre}mul_wo_adx'
     gen_mul_wo_adx(name, mont)
+  if opt.mulPre:
+    gen_mulPre(f'{opt.pre}mulPre', mont)
+  if opt.mulPre_wo_adx:
+    gen_mulPre_wo_adx(f'{opt.pre}mulPre_wo_adx', mont)
 
   term()
 

@@ -85,6 +85,10 @@ extern "C" {
 	void x64_mul(uint64_t*, const uint64_t*, const uint64_t*);
 	// mulx-only variant (no adcx/adox) for pre-Broadwell CPUs
 	void x64_mul_wo_adx(uint64_t*, const uint64_t*, const uint64_t*);
+	// z[2N] = x[N] * y[N] (no reduction), adcx/adox rows like x64_mul
+	void x64_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+	// z[2N] = x[N] * y[N] (no reduction), mulx-only like x64_mul_wo_adx
+	void x64_mulPre_wo_adx(uint64_t*, const uint64_t*, const uint64_t*);
 }
 
 template<class T>
@@ -313,7 +317,8 @@ int main(int argc, char *argv[]) {
 		check_and_bench(mode, "mul", C2, Fp::mul, llvm_argp_mul, {llvm_mul, llvm_var_mul, x64_mul, x64_mul_wo_adx});
 	}
 	if (ss.empty() || ss.find("mulPre") != ss.end()) {
-		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, nullptr, std::initializer_list<FpOp>{nullptr, nullptr, mcl::bint::get_mul(Fp::getOp().N)});
+		// var column = raw mcl::bint mul (reference), x64/x64woadx = generated
+		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, nullptr, std::initializer_list<FpOp>{nullptr, mcl::bint::get_mul(Fp::getOp().N), x64_mulPre, x64_mulPre_wo_adx});
 	}
 	if (ss.empty() || ss.find("mod") != ss.end()) {
 		check_and_bench(mode, "mod", C2, FpDbl::mod, nullptr, std::initializer_list<FpOp>{nullptr, nullptr, nullptr});
