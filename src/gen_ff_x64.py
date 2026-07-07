@@ -412,6 +412,70 @@ def gen_mul_wo_adx(name, mont):
         mov(pz, S_pz)
       store_mp(pz, c)
 
+# CF:c[n..0] = c[n..0] + p[n-1..0] * q + (CF << (64*n)) where rdx = q.
+# c[n] is loaded from the memory operand nxt (the next limb of xy) in the
+# shadow of the first mulx. After the add, c[0] = 0 by the choice of q, so
+# adox(tt, c[0]) only collects the pending OF-chain carry into tt; the caller
+# then reuses the c[0] register as the new top limb (rotatePack).
+# The carry-out is kept in the register CF via setc, never through memory.
+# tt = hi(p[n-1]*q) has enough headroom for the two adox because p is not
+# full bit. use rax, tt
+def mulAdd2(c, nxt, pp, tt, CF, addCF, updateCF=True):
+  n = len(c)-1
+  a = rax
+  xor_(a, a) # clear OF and CF
+  for i in range(n):
+    mulx(tt, a, ptr(pp + i * 8))
+    adox(c[i], a)
+    if i == 0:
+      mov(c[n], nxt)
+    if i == n-1:
+      break
+    adcx(c[i+1], tt)
+  adox(tt, c[0]) # tt += OF-chain carry (c[0] = 0)
+  if addCF:
+    adox(tt, CF) # add the carry-out of the previous iteration
+  adcx(c[n], tt) # c[n] += tt + CF-chain carry
+  if updateCF:
+    setc(CF.changeBit(8))
+
+# Montgomery reduction: z[N] = xy[2N] R^(-1) mod p where R = 2^(64N).
+# Port of mcl's gen_fpDbl_modNF (fp_generator.hpp). The N+1 limb accumulator
+# stays in registers (rotatePack) and the inter-iteration carry lives in the
+# register CF, so no carry flag ever goes through memory.
+def gen_mod(name, mont):
+  N = mont.pn
+  assert N <= 6
+  align(16)
+  with FuncProc(name):
+    assert not mont.isFullBit
+    with StackFrame(2, N+4, useRDX=True) as sf:
+      pz = sf.p[0]
+      pxy = sf.p[1]
+      pk = sf.t[0:N+1]
+      CF = sf.t[N+1]
+      tt = sf.t[N+2]
+      pp = sf.t[N+3]
+      lea(pp, ptr(rip+'p'))
+      xor_(CF, CF)
+      load_pm(pk[0:N], pxy)
+      for i in range(N):
+        mov(rdx, mont.ip)
+        imul(rdx, pk[0]) # rdx = q = uint64_t(pk[0] * ip)
+        # CF:pk = pk + xy[N+i]<<(64N) + p*q + CF<<(64N), then pk >>= 64
+        # (the shift is the rotation: pk[0] = 0 becomes the new top limb)
+        mulAdd2(pk, ptr(pxy + (N + i) * 8), pp, tt, CF, i > 0, i < N-1)
+        if i < N-1:
+          pk = rotatePack(pk)
+      pk0 = pk[0] # pk[0] = 0, reused as a temporary
+      zp = pk[1:]
+      keep = [pxy, rax, rdx, tt, CF, pk0][0:N]
+      assert len(keep) == N
+      mov_pp(keep, zp)
+      sub_pm(zp, pp) # z -= p
+      cmovc_pp(zp, keep)
+      store_mp(pz, zp)
+
 # mulPre: z[2N] = x[N] * y[N] (schoolbook, no reduction) with adcx/adox rows
 # (mulAdd), i.e. gen_mul without the Montgomery step. After row i, pk[0] is
 # final (= z[i]) and is stored immediately; rotatePack shifts the window.
@@ -527,6 +591,7 @@ def main():
   parser.add_argument('-mul_wo_adx', action='store_true', default=False, help='add mul function without adcx/adox (N=4, 6 only)')
   parser.add_argument('-mulPre', action='store_true', default=False, help='add mulPre function (z[2N] = x*y, no reduction)')
   parser.add_argument('-mulPre_wo_adx', action='store_true', default=False, help='add mulPre function without adcx/adox (N=4, 6 only)')
+  parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
   opt = parser.parse_args()
 
   init(opt)
@@ -565,6 +630,8 @@ def main():
     gen_mulPre(f'{opt.pre}mulPre', mont)
   if opt.mulPre_wo_adx:
     gen_mulPre_wo_adx(f'{opt.pre}mulPre_wo_adx', mont)
+  if opt.mod and not mont.isFullBit:
+    gen_mod(f'{opt.pre}mod', mont)
 
   term()
 
