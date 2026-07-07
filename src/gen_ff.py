@@ -180,6 +180,13 @@ def gen_fp2_sub(name, N, subTbl, offset):
 
     ret(Void)
 
+# split x into (high, low) with low being sizeL bits
+def split(x, sizeL):
+  H = lshr(x, sizeL)
+  H = trunc(H, x.bit - sizeL)
+  L = trunc(x, sizeL)
+  return (H, L)
+
 # return [xs[n-1]:xs[n-2]:...:xs[0]]
 def pack(xs):
   x = xs[0]
@@ -276,6 +283,53 @@ def gen_mul(name, mont, dataVar, mulUnit):
       storeN(z, pz)
     ret(Void)
 
+# Montgomery reduction: z = xy R^-1 mod p where xy has 2N units.
+def gen_mod(name, mont, dataVar, mulUnit):
+  N = mont.pn
+  bit = unit * N
+  bu = bit + unit
+  bu2 = bit + unit * 2
+  resetGlobalIdx()
+  pz = IntPtr(unit)
+  pxy = IntPtr(unit)
+  with Function(name, Void, pz, pxy):
+    pp = bitcast(dataVar, unit)
+    ipval = mont.ip
+    p = loadN(pp, N)
+    t = loadN(pxy, N)
+    H = None
+    for i in range(N):
+      if N == 1:
+        q = mul(t, ipval)
+      else:
+        q = mul(trunc(t, unit), ipval)
+      pq = call(mulUnit, pp, q)
+      if i > 0:
+        H = zext(H, bu)
+        H = shl(H, bit)
+        pq = add(pq, H)
+      nxt = load(getelementptr(pxy, N + i))
+      t = pack([t, nxt])
+      t = zext(t, bu2)
+      pq = zext(pq, bu2)
+      t = add(t, pq)
+      t = lshr(t, unit)
+      t = trunc(t, bu)
+      H, t = split(t, bit)
+    if mont.isFullBit:
+      p = zext(p, bu)
+      t = pack([t, H])
+      vc = sub(t, p)
+      c = trunc(lshr(vc, bit), 1)
+      z = select(c, t, vc)
+      z = trunc(z, bit)
+    else:
+      vc = sub(t, p)
+      c = trunc(lshr(vc, bit - 1), 1)
+      z = select(c, t, vc)
+    storeN(z, pz)
+    ret(Void)
+
 def gen_get_prime(name, pStr):
   resetGlobalIdx()
   r = IntPtr(8, const=True)
@@ -295,6 +349,7 @@ def main():
   parser.add_argument('-add', action='store_true', default=False, help='add add function')
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
   parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
+  parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
 
   opt = parser.parse_args()
   if opt.n == 0:
@@ -312,6 +367,7 @@ def main():
     opt.add = True
     opt.sub = True
     opt.mul = True
+    opt.mod = True
     showPrototype()
 
   dataVar = makeVar('p', mont.bit, mont.p, const=True, static=True)
@@ -335,6 +391,8 @@ def main():
 
   if opt.mul:
     gen_mul(f'{opt.pre}mul', mont, dataVar, mulUnit)
+  if opt.mod:
+    gen_mod(f'{opt.pre}mod', mont, dataVar, mulUnit)
 
   term()
 
