@@ -140,6 +140,23 @@ def gen_fp2_add(name, N, dataVar, var_p, offset, arg_p=False):
 
     ret(Void)
 
+# Writable {zero, p} table for the sub reduction. Layout is
+# [Npad x i64] zero, then p, padded to 2*Npad limbs (Npad = N rounded up to a
+# power of two so the borrow-scaled offset is a single shift and each entry is
+# cache-line aligned). It must be a non-constant global with external linkage:
+# if the optimizer can prove the contents (constant, or internal + never
+# stored), it folds the conditional +p back into an and-mask/cmov sequence.
+def makeSubTbl(pre, mont):
+  N = mont.pn
+  Npad = 1 << (N - 1).bit_length()
+  mask = (1 << unit) - 1
+  limbs = [(mont.p >> (unit * i)) & mask for i in range(N)]
+  v = [0] * Npad + limbs + [0] * (Npad - N)
+  tbl = makeVar(f'{pre}sub_tbl', unit, v, static=False, const=False, align=64)
+  return (tbl, Npad)
+
+# Reduction via a value select; kept for -arg-p where p is a runtime argument
+# and no table can be baked. clang lowers the select to an and-mask sequence.
 def gen_sub_raw(x, y, p, isFullBit):
   bit = x.bit
   if isFullBit:
@@ -156,7 +173,28 @@ def gen_sub_raw(x, y, p, isFullBit):
   v = add(v, c)
   return v
 
-def gen_fp_sub(name, N, dataVar, var_p, arg_p=False):
+# Reduction via the {zero, p} table indexed by the borrow. The variable-index
+# GEP cannot be rewritten into a select of the loaded values (the table is
+# writable memory), so the conditional +p lowers to an add/adc chain with
+# folded memory operands: the same idiom as the hand-written x64 asm.
+def gen_sub_raw_tbl(x, y, ptbl, Npad, isFullBit):
+  bit = x.bit
+  if isFullBit:
+    x = zext(x, bit + unit)
+    y = zext(y, bit + unit)
+    v = sub(x, y)
+    c = trunc(lshr(v, bit), 1)
+    v = trunc(v, bit)
+  else:
+    v = sub(x, y)
+    c = trunc(lshr(v, bit - 1), 1)
+  off = shl(zext(c, unit), Npad.bit_length() - 1)
+  addr = getelementptr(ptbl, off)
+  p = load(bitcast(addr, bit))
+  v = add(v, p)
+  return v
+
+def gen_fp_sub(name, N, subTbl, arg_p=False):
   bit = unit * N
   resetGlobalIdx();
   pz = IntPtr(unit)
@@ -171,15 +209,19 @@ def gen_fp_sub(name, N, dataVar, var_p, arg_p=False):
       # 4th argument is a pointer to { ip, p[N] }; sub only needs p (element 1).
       pp = getelementptr(pParam, 1)
     else:
-      pp, _ = derivePtr(dataVar, var_p)
+      tbl, Npad = subTbl
+      ptbl = bitcast(tbl, unit)
     x = loadN(px, N, volatile=True)
     y = loadN(py, N, volatile=True)
-    p = loadN(pp, N)
-    v = gen_sub_raw(x, y, p, mont.isFullBit)
+    if arg_p:
+      p = loadN(pp, N)
+      v = gen_sub_raw(x, y, p, mont.isFullBit)
+    else:
+      v = gen_sub_raw_tbl(x, y, ptbl, Npad, mont.isFullBit)
     storeN(v, pz)
     ret(Void)
 
-def gen_fp2_sub(name, N, dataVar, var_p, offset, arg_p=False):
+def gen_fp2_sub(name, N, subTbl, offset, arg_p=False):
   bit = unit * N
   resetGlobalIdx();
   pz = IntPtr(unit)
@@ -193,13 +235,17 @@ def gen_fp2_sub(name, N, dataVar, var_p, offset, arg_p=False):
     if arg_p:
       # 4th argument is a pointer to { ip, p[N] }; sub only needs p (element 1).
       pp = getelementptr(pParam, 1)
+      p = loadN(pp, N)
     else:
-      pp, _ = derivePtr(dataVar, var_p)
-    p = loadN(pp, N)
+      tbl, Npad = subTbl
+      ptbl = bitcast(tbl, unit)
     for i in range(2):
       x = loadN(px, N, offset=i*offset, volatile=True)
       y = loadN(py, N, offset=i*offset, volatile=True)
-      v = gen_sub_raw(x, y, p, mont.isFullBit)
+      if arg_p:
+        v = gen_sub_raw(x, y, p, mont.isFullBit)
+      else:
+        v = gen_sub_raw_tbl(x, y, ptbl, Npad, mont.isFullBit)
       storeN(v, pz, offset=i*offset)
 
     ret(Void)
@@ -369,8 +415,9 @@ def main():
     gen_fp_add(f'{opt.pre}add', mont.pn, dataVar, opt.var_p, opt.arg_p)
     gen_fp2_add(f'{opt.pre2}add', mont.pn, dataVar, opt.var_p, opt.offset, opt.arg_p)
   if opt.sub:
-    gen_fp_sub(f'{opt.pre}sub', mont.pn, dataVar, opt.var_p, opt.arg_p)
-    gen_fp2_sub(f'{opt.pre2}sub', mont.pn, dataVar, opt.var_p, opt.offset, opt.arg_p)
+    subTbl = None if opt.arg_p else makeSubTbl(opt.pre, mont)
+    gen_fp_sub(f'{opt.pre}sub', mont.pn, subTbl, opt.arg_p)
+    gen_fp2_sub(f'{opt.pre2}sub', mont.pn, subTbl, opt.offset, opt.arg_p)
 
   mulUU = gen_mulUU()
   extractHigh = gen_extractHigh()
