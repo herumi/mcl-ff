@@ -30,6 +30,15 @@ DEPEND_FILE=$(BENCH_OBJ:.o=.d)
 
 TARGET=$(LL) $(HEADER) $(BENCH_EXE)
 
+# Regenerate generated files when TYPE/BIT/NAME change: GEN_STAMP is rewritten
+# (updating its mtime) only when its content differs from the current values,
+# so switching TYPE rebuilds exactly the targets that depend on it.
+GEN_STAMP=obj/.gen_param
+.PHONY: FORCE
+FORCE:
+$(GEN_STAMP): FORCE
+	@echo '$(TYPE) $(BIT) $(NAME)' | cmp -s - $@ || echo '$(TYPE) $(BIT) $(NAME)' > $@
+
 CFLAGS=-Wall -Wextra -I ./include -I $(MCL_DIR)/include -fPIC -g
 #CFLAGS+=-Wno-unused-command-line-argument -Wno-override-module
 LDFLAGS=$(MCL_FF_OBJ) $(MCL_LIB)
@@ -42,7 +51,7 @@ else
 endif
 
 ifeq ($(ARCH),x86_64)
-$(X64_ASM): src/gen_ff_x64.py
+$(X64_ASM): src/gen_ff_x64.py $(GEN_STAMP)
 	$(PYTHON) $< -m gas > $@ -type $(TYPE) -mul
 obj/$(NAME)_x64.o: $(X64_ASM)
 	$(CXX) -c -o $@ $< -fPIC
@@ -61,13 +70,13 @@ bin/%.exe: obj/%.o $(MCL_FF_OBJ) $(HEADER)
 
 all: $(TARGET)
 
-$(LL): src/gen_ff.py Makefile src/s_xbyak_llvm.py
+$(LL): src/gen_ff.py Makefile src/s_xbyak_llvm.py $(GEN_STAMP)
 	$(PYTHON) $< -u $(BIT) -type $(TYPE) -pre $(PRE) $(GEN_OPT) > $@
 
 obj/$(NAME).o: $(LL)
 	$(CLANG) -c -o $@ $< $(CFLAGS)
 
-$(HEADER): src/gen_ff.py Makefile
+$(HEADER): src/gen_ff.py Makefile $(GEN_STAMP)
 	@cat src/header.h > $@
 	@echo '// p=$(P)' >> $@
 	@$(PYTHON) $< -u $(BIT) -proto >> $@
@@ -79,13 +88,13 @@ test: $(BENCH_EXE)
 
 # Generate add/sub/mul from gen_ff.py (LLVM) and gen_ff_x64.py (x64 asm) under
 # distinct prefixes and compare them within a single executable (test/bench.cpp).
-src/bench_llvm.ll: src/gen_ff.py
+src/bench_llvm.ll: src/gen_ff.py $(GEN_STAMP)
 	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul > $@
-src/bench_llvm_var.ll: src/gen_ff.py
+src/bench_llvm_var.ll: src/gen_ff.py $(GEN_STAMP)
 	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_var_ -add -sub -mul -var-p > $@
-src/bench_llvm_argp.ll: src/gen_ff.py
+src/bench_llvm_argp.ll: src/gen_ff.py $(GEN_STAMP)
 	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_argp_ -add -sub -mul -arg-p > $@
-src/bench_x64.S: src/gen_ff_x64.py
+src/bench_x64.S: src/gen_ff_x64.py $(GEN_STAMP)
 	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul -mul_wo_adx -mulPre -mulPre_wo_adx > $@
 obj/bench_llvm.o: src/bench_llvm.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
@@ -125,6 +134,3 @@ a64asm: $(LL)
 
 clean:
 	rm -rf src/*.s src/*.S src/*.ll obj/*.o obj/*.d $(HEADER) bin/*.exe
-
-# don't remove these files automatically
-.SECONDARY: $(TEST_OBJ)
