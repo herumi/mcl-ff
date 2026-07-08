@@ -2,3 +2,6 @@ __pycache__
 *.o
 *.d
 *.exe
+
+CLAUDE.md
+memo.md
