@@ -370,7 +370,7 @@ def main():
     opt.mod = True
     showPrototype()
 
-  dataVar = makeVar('p', mont.bit, mont.p, const=True, static=True)
+  dataVar = makeVar('p', mont.bit, mont.p, const=False, static=False)
   makeVar('ip', unit, mont.ip, const=True, static=True)
   pStr = makeStrVar('pStr', hex(opt.p))
 
