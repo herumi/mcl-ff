@@ -330,6 +330,33 @@ def gen_mod(name, mont, dataVar, mulUnit):
     storeN(z, pz)
     ret(Void)
 
+# sqrPre: pz[2N] = px[N]^2 (no reduction).
+# Port of fp_generator.hpp sqrPre4/sqrPre6: accumulate the strictly-upper-
+# triangle cross products sum_{i<j} x[i]*x[j] << unit*(i+j), double them (each
+# off-diagonal term appears twice by symmetry), then add the diagonal squares
+# x[i]^2 << unit*2*i. LLVM lowers the wide shl/add chain to a mulx/adc sequence.
+def gen_sqrPre(name, N):
+  bit = unit * N
+  bit2 = bit * 2
+  resetGlobalIdx()
+  pz = IntPtr(unit)
+  px = IntPtr(unit)
+  with Function(name, Void, pz, px):
+    x = [load(getelementptr(px, i)) for i in range(N)]
+    cross = None
+    for i in range(N):
+      for j in range(i + 1, N):
+        xij = mul(zext(x[i], unit2), zext(x[j], unit2))
+        xij = shl(zext(xij, bit2), unit * (i + j))
+        cross = xij if cross is None else add(cross, xij)
+    z = shl(cross, 1)
+    for i in range(N):
+      xii = mul(zext(x[i], unit2), zext(x[i], unit2))
+      xii = shl(zext(xii, bit2), unit * 2 * i)
+      z = add(z, xii)
+    storeN(z, pz)
+    ret(Void)
+
 def gen_get_prime(name, pStr):
   resetGlobalIdx()
   r = IntPtr(8, const=True)
@@ -350,6 +377,7 @@ def main():
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
   parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
   parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
+  parser.add_argument('-sqrPre', action='store_true', default=False, help='add sqrPre function (z[2N] = x^2, no reduction)')
 
   opt = parser.parse_args()
   if opt.n == 0:
@@ -368,6 +396,7 @@ def main():
     opt.sub = True
     opt.mul = True
     opt.mod = True
+    opt.sqrPre = True
     showPrototype()
 
   dataVar = makeVar('p', mont.bit, mont.p, const=False, static=False)
@@ -393,6 +422,8 @@ def main():
     gen_mul(f'{opt.pre}mul', mont, dataVar, mulUnit)
   if opt.mod:
     gen_mod(f'{opt.pre}mod', mont, dataVar, mulUnit)
+  if opt.sqrPre:
+    gen_sqrPre(f'{opt.pre}sqrPre', mont.pn)
 
   term()
 

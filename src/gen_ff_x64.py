@@ -579,6 +579,181 @@ def gen_mulPre_wo_adx(name, mont):
           release(c[cSpill])
           c[cSpill] = None
 
+# [H:r[n-1]:...:r[0]] <<= 1 (H is assumed to be a fresh register, set to 0).
+# mulx does not touch the flags, so the add/adc self-doubling chain is intact.
+def shl1(r, H):
+  mov(H, 0)
+  add(r[0], r[0])
+  for i in range(1, len(r)):
+    adc(r[i], r[i])
+  adc(H, H)
+
+# py[7..0] = px[3..0]^2. Port of fp_generator.hpp sqrPre4NF: accumulate the
+# strictly-upper-triangle cross products x[i]*x[j] (i<j) into [t5..t0] (shifted
+# down by one limb), double them with shl1, then add the diagonal squares
+# x[i]^2 while storing the result. t holds 11 temporaries.
+def sqrPre4(py, px, t):
+  t0, t1, t2, t3, t4, t5 = t[0:6]
+  x0, x1, x2, x3 = t[6:10]
+  H = t[10]
+
+  load_pm([x0, x1, x2, x3], px)
+  mov(rdx, x0)
+  mulx(t3, t2, x3) # (3, 0)
+  mulx(rax, t1, x2) # (2, 0)
+  add(t2, rax)
+  mov(rdx, x1)
+  mulx(t4, rax, x3) # (3, 1)
+  adc(t3, rax)
+  adc(t4, 0) # [t4:t3:t2:t1]
+  mulx(rax, t0, x0) # (1, 0)
+  add(t1, rax)
+  mulx(rdx, rax, x2) # (2, 1)
+  adc(t2, rax)
+  adc(t3, rdx)
+  mov(rdx, x3)
+  mulx(t5, rax, x2) # (3, 2)
+  adc(t4, rax)
+  adc(t5, 0)
+
+  shl1([t0, t1, t2, t3, t4, t5], H)
+  mov(rdx, x0)
+  mulx(rdx, rax, rdx)
+  mov(ptr(py + 8 * 0), rax)
+  add(rdx, t0)
+  mov(ptr(py + 8 * 1), rdx)
+  mov(rdx, x1)
+  mulx(rdx, rax, rdx)
+  adc(rax, t1)
+  mov(ptr(py + 8 * 2), rax)
+  adc(rdx, t2)
+  mov(ptr(py + 8 * 3), rdx)
+  mov(rdx, x2)
+  mulx(rdx, rax, rdx)
+  adc(rax, t3)
+  mov(ptr(py + 8 * 4), rax)
+  adc(rdx, t4)
+  mov(ptr(py + 8 * 5), rdx)
+  mov(rdx, x3)
+  mulx(rdx, rax, rdx)
+  adc(rax, t5)
+  mov(ptr(py + 8 * 6), rax)
+  adc(rdx, H)
+  mov(ptr(py + 8 * 7), rdx)
+
+# py[11..0] = px[5..0]^2. Port of fp_generator.hpp sqrPre6 (same scheme as
+# sqrPre4, px is read from memory since 6 limbs do not fit in registers).
+def sqrPre6(py, px, t):
+  t0, t1, t2, t3, t4, t5, t6, t7, t8, t9 = t[0:10]
+  H = t[10]
+
+  mov(rdx, ptr(px + 8 * 0))
+  mulx(t5, t4, ptr(px + 8 * 5)) # [t5:t4] = (5, 0)
+  mulx(rax, t3, ptr(px + 8 * 4)) # (4, 0)
+  add(t4, rax)
+  mov(rdx, ptr(px + 8 * 1))
+  mulx(t6, rax, ptr(px + 8 * 5)) # (5, 1)
+  adc(t5, rax)
+  adc(t6, 0) # [t6:t5:t4:t3]
+  mov(rdx, ptr(px + 8 * 0))
+  mulx(rax, t2, ptr(px + 8 * 3))
+  add(t3, rax)
+  mov(rdx, ptr(px + 8 * 1))
+  mulx(H, rax, ptr(px + 8 * 4))
+  adc(t4, rax)
+  adc(t5, H)
+  mov(rdx, ptr(px + 8 * 2))
+  mulx(t7, rax, ptr(px + 8 * 5))
+  adc(t6, rax)
+  adc(t7, 0) # [t7:...:t2]
+
+  mov(rdx, ptr(px + 8 * 0))
+  mulx(H, t1, ptr(px + 8 * 2))
+  adc(t2, H)
+  mov(rdx, ptr(px + 8 * 1))
+  mulx(H, rax, ptr(px + 8 * 3))
+  adc(t3, rax)
+  adc(t4, H)
+  mov(rdx, ptr(px + 8 * 2))
+  mulx(H, rax, ptr(px + 8 * 4))
+  adc(t5, rax)
+  adc(t6, H)
+  mov(rdx, ptr(px + 8 * 3))
+  mulx(t8, rax, ptr(px + 8 * 5))
+  adc(t7, rax)
+  adc(t8, 0) # [t8:...:t1]
+  mov(rdx, ptr(px + 8 * 0))
+  mulx(H, t0, ptr(px + 8 * 1))
+  add(t1, H)
+  mov(rdx, ptr(px + 8 * 1))
+  mulx(H, rax, ptr(px + 8 * 2))
+  adc(t2, rax)
+  adc(t3, H)
+  mov(rdx, ptr(px + 8 * 2))
+  mulx(H, rax, ptr(px + 8 * 3))
+  adc(t4, rax)
+  adc(t5, H)
+  mov(rdx, ptr(px + 8 * 3))
+  mulx(H, rax, ptr(px + 8 * 4))
+  adc(t6, rax)
+  adc(t7, H)
+  mov(rdx, ptr(px + 8 * 4))
+  mulx(t9, rax, ptr(px + 8 * 5))
+  adc(t8, rax)
+  adc(t9, 0) # [t9...:t0]
+  shl1([t0, t1, t2, t3, t4, t5, t6, t7, t8, t9], H)
+
+  mov(rdx, ptr(px + 8 * 0))
+  mulx(rdx, rax, rdx)
+  mov(ptr(py + 8 * 0), rax)
+  add(t0, rdx)
+  mov(ptr(py + 8 * 1), t0)
+  mov(rdx, ptr(px + 8 * 1))
+  mulx(rdx, rax, rdx)
+  adc(t1, rax)
+  mov(ptr(py + 8 * 2), t1)
+  adc(t2, rdx)
+  mov(ptr(py + 8 * 3), t2)
+  mov(rdx, ptr(px + 8 * 2))
+  mulx(rdx, rax, rdx)
+  adc(t3, rax)
+  mov(ptr(py + 8 * 4), t3)
+  adc(t4, rdx)
+  mov(ptr(py + 8 * 5), t4)
+  mov(rdx, ptr(px + 8 * 3))
+  mulx(rdx, rax, rdx)
+  adc(t5, rax)
+  mov(ptr(py + 8 * 6), t5)
+  adc(t6, rdx)
+  mov(ptr(py + 8 * 7), t6)
+  mov(rdx, ptr(px + 8 * 4))
+  mulx(rdx, rax, rdx)
+  adc(t7, rax)
+  mov(ptr(py + 8 * 8), t7)
+  adc(t8, rdx)
+  mov(ptr(py + 8 * 9), t8)
+  mov(rdx, ptr(px + 8 * 5))
+  mulx(rdx, rax, rdx)
+  adc(t9, rax)
+  mov(ptr(py + 8 * 10), t9)
+  adc(rdx, H)
+  mov(ptr(py + 8 * 11), rdx)
+
+# sqrPre: z[2N] = x[N]^2 (no reduction). Dispatches to the hand-scheduled
+# sqrPre4/sqrPre6 (mulx + add/adc, no adcx/adox), which fit in 11 temps.
+def gen_sqrPre(name, mont):
+  N = mont.pn
+  assert N in (4, 6)
+  align(16)
+  with FuncProc(name):
+    with StackFrame(2, 11, useRDX=True) as sf:
+      py = sf.p[0]
+      px = sf.p[1]
+      if N == 4:
+        sqrPre4(py, px, sf.t)
+      else:
+        sqrPre6(py, px, sf.t)
+
 def main():
   parser = getDefaultParser('gen bint')
   parser.add_argument('-p', type=str, default='', help='characteristic of a finite field')
@@ -592,6 +767,7 @@ def main():
   parser.add_argument('-mulPre', action='store_true', default=False, help='add mulPre function (z[2N] = x*y, no reduction)')
   parser.add_argument('-mulPre_wo_adx', action='store_true', default=False, help='add mulPre function without adcx/adox (N=4, 6 only)')
   parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
+  parser.add_argument('-sqrPre', action='store_true', default=False, help='add sqrPre function (z[2N] = x^2, no reduction, N=4, 6 only)')
   opt = parser.parse_args()
 
   init(opt)
@@ -632,6 +808,8 @@ def main():
     gen_mulPre_wo_adx(f'{opt.pre}mulPre_wo_adx', mont)
   if opt.mod and not mont.isFullBit:
     gen_mod(f'{opt.pre}mod', mont)
+  if opt.sqrPre:
+    gen_sqrPre(f'{opt.pre}sqrPre', mont)
 
   term()
 

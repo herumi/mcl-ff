@@ -59,6 +59,8 @@ extern "C" {
 	void llvm_mul(uint64_t*, const uint64_t*, const uint64_t*);
 	// z[N] = xy[2N] R^-1 mod p (Montgomery reduction)
 	void llvm_mod(uint64_t*, const uint64_t*);
+	// z[2N] = x[N]^2 (no reduction)
+	void llvm_sqrPre(uint64_t*, const uint64_t*);
 	void x64_add(uint64_t*, const uint64_t*, const uint64_t*);
 	void x642_add(uint64_t*, const uint64_t*, const uint64_t*);
 	void x64_sub(uint64_t*, const uint64_t*, const uint64_t*);
@@ -72,6 +74,8 @@ extern "C" {
 	void x64_mulPre_wo_adx(uint64_t*, const uint64_t*, const uint64_t*);
 	// z[N] = xy[2N] R^-1 mod p (Montgomery reduction)
 	void x64_mod(uint64_t*, const uint64_t*);
+	// z[2N] = x[N]^2 (no reduction), hand-scheduled mulx + add/adc
+	void x64_sqrPre(uint64_t*, const uint64_t*);
 }
 
 template<class T>
@@ -241,7 +245,7 @@ int main(int argc, char *argv[]) {
 	int mode;
 	cybozu::Option opt;
 	std::vector<std::string> vs;
-	opt.appendVec(&vs, "set", ": select from {add,sub,add2,sub2,mul,mulPre,mod}");
+	opt.appendVec(&vs, "set", ": select from {add,sub,add2,sub2,mul,mulPre,mod,sqrPre}");
 	opt.appendOpt(&mode, TEST_MODE | BENCH_MODE, "mode", ": test(1), bench(2), both(3), default(3)");
 	opt.appendHelp("h");
 	if (!opt.parse(argc, argv)) {
@@ -293,5 +297,8 @@ int main(int argc, char *argv[]) {
 	}
 	if (ss.empty() || ss.find("mod") != ss.end()) {
 		check_and_bench(mode, "mod", C2, FpDbl::mod, std::initializer_list<FpOp1>{llvm_mod, x64_mod});
+	}
+	if (ss.empty() || ss.find("sqrPre") != ss.end()) {
+		check_and_bench(mode, "sqrPre", C2, FpDbl::sqrPre, std::initializer_list<FpOp1>{llvm_sqrPre, x64_sqrPre});
 	}
 }

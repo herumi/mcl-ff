@@ -89,9 +89,9 @@ test: $(BENCH_EXE)
 # Generate add/sub/mul from gen_ff.py (LLVM) and gen_ff_x64.py (x64 asm) under
 # distinct prefixes and compare them within a single executable (test/bench.cpp).
 src/bench_llvm.ll: src/gen_ff.py $(GEN_STAMP)
-	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul -mod > $@
+	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul -mod -sqrPre > $@
 src/bench_x64.S: src/gen_ff_x64.py $(GEN_STAMP)
-	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul -mul_wo_adx -mulPre -mulPre_wo_adx -mod > $@
+	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul -mul_wo_adx -mulPre -mulPre_wo_adx -mod -sqrPre > $@
 obj/bench_llvm.o: src/bench_llvm.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
 obj/bench_x64.o: src/bench_x64.S
