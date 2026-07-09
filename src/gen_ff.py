@@ -330,18 +330,64 @@ def gen_mod(name, mont, dataVar, mulUnit):
     storeN(z, pz)
     ret(Void)
 
+# pz[2N] = px[N] * py[N] (no reduction). Port of gen.py:generic_fpDbl_mul of
+# mcl: schoolbook rows x * y[i] accumulated in the bit+unit accumulator t, whose
+# bottom unit is final after each row and is stored immediately.
+def mulPre_raw(pz, px, py, N, mulUnit):
+  if N == 1:
+    x = zext(load(px), unit2)
+    y = zext(load(py), unit2)
+    storeN(mul(x, y), pz)
+    return
+  y = load(py)
+  xy = call(mulUnit, px, y)
+  store(trunc(xy, unit), pz)
+  t = lshr(xy, unit)
+  for i in range(1, N):
+    y = load(getelementptr(py, i))
+    xy = call(mulUnit, px, y)
+    t = add(t, xy)
+    if i < N - 1:
+      storeN(trunc(t, unit), pz, i)
+      t = lshr(t, unit)
+  storeN(t, pz, N - 1)
+
+# mulPre: pz[2N] = px[N] * py[N] (no reduction).
+def gen_mulPre(name, N, mulUnit):
+  resetGlobalIdx()
+  pz = IntPtr(unit)
+  px = IntPtr(unit)
+  py = IntPtr(unit)
+  with Function(name, Void, pz, px, py) as f:
+    mulPre_raw(pz, px, py, N, mulUnit)
+    ret(Void)
+  return f
+
+# If True then sqrPre(z, x) is a call to mulPre(z, x, x), as in mcl's
+# gen_mcl_fpDbl_sqrPre, instead of the dedicated schedule below.
+# Counter-intuitively this is the fastest of the three variants we tried: when
+# the mulPre body is inlined (or written as a plain mul(x, x) on 2N limbs) LLVM
+# spots that x[i]*x[j] == x[j]*x[i] and drops 36 mulx down to 21, but the carry
+# chain it then builds is long enough to lose the win. Clang keeps the call as
+# a tail jump, so nothing is paid for it.
+USE_MULPRE_FOR_SQRPRE = True
+
 # sqrPre: pz[2N] = px[N]^2 (no reduction).
 # Port of fp_generator.hpp sqrPre4/sqrPre6: accumulate the strictly-upper-
 # triangle cross products sum_{i<j} x[i]*x[j] << unit*(i+j), double them (each
 # off-diagonal term appears twice by symmetry), then add the diagonal squares
 # x[i]^2 << unit*2*i. LLVM lowers the wide shl/add chain to a mulx/adc sequence.
-def gen_sqrPre(name, N):
+def gen_sqrPre(name, N, mulPreF):
   bit = unit * N
   bit2 = bit * 2
   resetGlobalIdx()
   pz = IntPtr(unit)
   px = IntPtr(unit)
   with Function(name, Void, pz, px):
+    if USE_MULPRE_FOR_SQRPRE:
+      call(mulPreF, pz, px, px)
+      ret(Void)
+      return
     x = [load(getelementptr(px, i)) for i in range(N)]
     cross = None
     for i in range(N):
@@ -377,6 +423,7 @@ def main():
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
   parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
   parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
+  parser.add_argument('-mulPre', action='store_true', default=False, help='add mulPre function (z[2N] = x*y, no reduction)')
   parser.add_argument('-sqrPre', action='store_true', default=False, help='add sqrPre function (z[2N] = x^2, no reduction)')
 
   opt = parser.parse_args()
@@ -386,6 +433,8 @@ def main():
   if opt.p == '':
     opt.p = primeTbl[opt.type]
   opt.pre2 = opt.pre[:-1] + '2_'
+  if opt.sqrPre and USE_MULPRE_FOR_SQRPRE:
+    opt.mulPre = True
 
   global mont, unit, unit2
   mont = Montgomery(opt.p, opt.u)
@@ -396,6 +445,7 @@ def main():
     opt.sub = True
     opt.mul = True
     opt.mod = True
+    opt.mulPre = True
     opt.sqrPre = True
     showPrototype()
 
@@ -422,8 +472,11 @@ def main():
     gen_mul(f'{opt.pre}mul', mont, dataVar, mulUnit)
   if opt.mod:
     gen_mod(f'{opt.pre}mod', mont, dataVar, mulUnit)
+  mulPreF = None
+  if opt.mulPre:
+    mulPreF = gen_mulPre(f'{opt.pre}mulPre', mont.pn, mulUnit)
   if opt.sqrPre:
-    gen_sqrPre(f'{opt.pre}sqrPre', mont.pn)
+    gen_sqrPre(f'{opt.pre}sqrPre', mont.pn, mulPreF)
 
   term()
 

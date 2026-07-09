@@ -57,6 +57,8 @@ extern "C" {
 	void llvm_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm2_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_mul(uint64_t*, const uint64_t*, const uint64_t*);
+	// z[2N] = x[N] * y[N] (no reduction)
+	void llvm_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
 	// z[N] = xy[2N] R^-1 mod p (Montgomery reduction)
 	void llvm_mod(uint64_t*, const uint64_t*);
 	// z[2N] = x[N]^2 (no reduction)
@@ -292,8 +294,7 @@ int main(int argc, char *argv[]) {
 		check_and_bench(mode, "mul", C2, Fp::mul, {llvm_mul, x64_mul, x64_mul_wo_adx});
 	}
 	if (ss.empty() || ss.find("mulPre") != ss.end()) {
-		// llvm column = raw mcl::bint mul (reference), x64/x64woadx = generated
-		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, std::initializer_list<FpOp>{mcl::bint::get_mul(Fp::getOp().N), x64_mulPre, x64_mulPre_wo_adx});
+		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, std::initializer_list<FpOp>{llvm_mulPre, x64_mulPre, x64_mulPre_wo_adx});
 	}
 	if (ss.empty() || ss.find("mod") != ss.end()) {
 		check_and_bench(mode, "mod", C2, FpDbl::mod, std::initializer_list<FpOp1>{llvm_mod, x64_mod});
