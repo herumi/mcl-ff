@@ -18,6 +18,10 @@
 #include <cybozu/option.hpp>
 #include <set>
 
+#ifdef MCL_X64_ASM
+//	#warning "x64asm"
+#endif
+
 using namespace mcl;
 using namespace mcl::fp;
 
@@ -63,6 +67,7 @@ extern "C" {
 	void llvm_mod(uint64_t*, const uint64_t*);
 	// z[2N] = x[N]^2 (no reduction)
 	void llvm_sqrPre(uint64_t*, const uint64_t*);
+#ifdef MCL_X64_ASM
 	void x64_add(uint64_t*, const uint64_t*, const uint64_t*);
 	void x642_add(uint64_t*, const uint64_t*, const uint64_t*);
 	void x64_sub(uint64_t*, const uint64_t*, const uint64_t*);
@@ -78,6 +83,18 @@ extern "C" {
 	void x64_mod(uint64_t*, const uint64_t*);
 	// z[2N] = x[N]^2 (no reduction), hand-scheduled mulx + add/adc
 	void x64_sqrPre(uint64_t*, const uint64_t*);
+#else
+	#define x64_add nullptr
+	#define x642_add nullptr
+	#define x64_sub nullptr
+	#define x642_sub nullptr
+	#define x64_mul nullptr
+	#define x64_mul_wo_adx nullptr
+	#define x64_mulPre nullptr
+	#define x64_mulPre_wo_adx nullptr
+	#define x64_mod nullptr
+	#define x64_sqrPre nullptr
+#endif
 }
 
 template<class T>

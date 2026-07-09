@@ -56,6 +56,7 @@ $(X64_ASM): src/gen_ff_x64.py $(GEN_STAMP)
 obj/$(NAME)_x64.o: $(X64_ASM)
 	$(CXX) -c -o $@ $< -fPIC
 MCL_FF_OBJ+=obj/$(NAME)_x64.o
+BENCH_X64_OBJ=obj/bench_x64.o
 endif
 
 ifeq ($(DEBUG),1)
@@ -94,10 +95,10 @@ src/bench_x64.S: src/gen_ff_x64.py $(GEN_STAMP)
 	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul -mul_wo_adx -mulPre -mulPre_wo_adx -mod -sqrPre > $@
 obj/bench_llvm.o: src/bench_llvm.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
-obj/bench_x64.o: src/bench_x64.S
+$(BENCH_X64_OBJ): src/bench_x64.S
 	$(CXX) -c -o $@ $< -fPIC
-$(BENCH_EXE): test/bench.cpp obj/bench_llvm.o obj/bench_x64.o $(HEADER)
-	$(CXX) -o $@ $< obj/bench_llvm.o obj/bench_x64.o $(CFLAGS) $(MCL_LIB)
+$(BENCH_EXE): test/bench.cpp obj/bench_llvm.o $(BENCH_X64_OBJ) $(HEADER)
+	$(CXX) -o $@ $< obj/bench_llvm.o $(BENCH_X64_OBJ) $(CFLAGS) $(MCL_LIB)
 bench: $(BENCH_EXE)
 	$(BENCH_EXE)
 
