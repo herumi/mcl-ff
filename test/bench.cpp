@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
-#include <chrono>
 #include <initializer_list>
 #include <vector>
 #include <type_traits>
@@ -18,8 +17,16 @@
 #include <cybozu/option.hpp>
 #include <set>
 
-#ifdef MCL_X64_ASM
-//	#warning "x64asm"
+#define USE_CLK
+
+#ifndef MCL_X64_ASM
+	#undef USE_CLK
+#endif
+
+#ifdef USE_CLK
+#include <cybozu/benchmark.hpp>
+#else
+#include <chrono>
 #endif
 
 using namespace mcl;
@@ -164,10 +171,20 @@ static double measure(Op op, size_t P, size_t loop)
 {
 	size_t m = loop / P;
 	for (size_t i = 0; i < m / 10; i++) for (size_t k = 0; k < P; k++) op(k); // warmup
+#ifdef USE_CLK
+	cybozu::CpuClock clk;
+	clk.begin();
+#else
 	auto t0 = std::chrono::steady_clock::now();
+#endif
 	for (size_t i = 0; i < m; i++) for (size_t k = 0; k < P; k++) op(k);
+#ifdef USE_CLK
+	clk.end();
+	return clk.getClock() / double(m * P);
+#else
 	auto t1 = std::chrono::steady_clock::now();
 	return std::chrono::duration<double, std::nano>(t1 - t0).count() / (m * P);
+#endif
 }
 
 void printRow(const char *name, const char *mode, const std::vector<double>& v) {
@@ -284,7 +301,11 @@ int main(int argc, char *argv[]) {
 	}
 
 	if (mode & BENCH_MODE) {
+#ifdef USE_CLK
+		printf("unit: clk/op (smaller is faster); base = mcl, (Nx) = time / base\n");
+#else
 		printf("unit: ns/op (smaller is faster); base = mcl, (Nx) = time / base\n");
+#endif
 		printf("%-7s %-11s %15s %15s %15s %15s\n",
 			"op", "mode", "base", "llvm", "x64", "x64woadx");
 	}
