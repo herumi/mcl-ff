@@ -439,10 +439,34 @@ def mulAdd2(c, nxt, pp, tt, CF, addCF, updateCF=True):
   if updateCF:
     setc(CF.changeBit(8))
 
-# Montgomery reduction: z[N] = xy[2N] R^(-1) mod p where R = 2^(64N).
-# Port of mcl's gen_fpDbl_modNF (fp_generator.hpp). The N+1 limb accumulator
-# stays in registers (rotatePack) and the inter-iteration carry lives in the
-# register CF, so no carry flag ever goes through memory.
+# body of the Montgomery reduction: z[N] = xy[2N] R^(-1) mod p where
+# R = 2^(64N). Port of mcl's gen_fpDbl_modNF (fp_generator.hpp). The N+1 limb
+# accumulator pk stays in registers (rotatePack) and the inter-iteration
+# carry lives in the register CF, so no carry flag ever goes through memory.
+# Uses rax, rdx; pxy is clobbered (reused for the final select).
+def mod_body(pz, pxy, pk, CF, tt, pp, mont):
+  N = mont.pn
+  lea(pp, ptr(rip+'p'))
+  xor_(CF, CF)
+  load_pm(pk[0:N], pxy)
+  for i in range(N):
+    mov(rdx, mont.ip)
+    imul(rdx, pk[0]) # rdx = q = uint64_t(pk[0] * ip)
+    # CF:pk = pk + xy[N+i]<<(64N) + p*q + CF<<(64N), then pk >>= 64
+    # (the shift is the rotation: pk[0] = 0 becomes the new top limb)
+    mulAdd2(pk, ptr(pxy + (N + i) * 8), pp, tt, CF, i > 0, i < N-1)
+    if i < N-1:
+      pk = rotatePack(pk)
+  pk0 = pk[0] # pk[0] = 0, reused as a temporary
+  zp = pk[1:]
+  keep = [pxy, rax, rdx, tt, CF, pk0][0:N]
+  assert len(keep) == N
+  mov_pp(keep, zp)
+  sub_pm(zp, pp) # z -= p
+  cmovc_pp(zp, keep)
+  store_mp(pz, zp)
+
+# Montgomery reduction: z[N] = xy[2N] R^(-1) mod p.
 def gen_mod(name, mont):
   N = mont.pn
   assert N <= 6
@@ -450,61 +474,35 @@ def gen_mod(name, mont):
   with FuncProc(name):
     assert not mont.isFullBit
     with StackFrame(2, N+4, useRDX=True) as sf:
-      pz = sf.p[0]
-      pxy = sf.p[1]
-      pk = sf.t[0:N+1]
-      CF = sf.t[N+1]
-      tt = sf.t[N+2]
-      pp = sf.t[N+3]
-      lea(pp, ptr(rip+'p'))
-      xor_(CF, CF)
-      load_pm(pk[0:N], pxy)
-      for i in range(N):
-        mov(rdx, mont.ip)
-        imul(rdx, pk[0]) # rdx = q = uint64_t(pk[0] * ip)
-        # CF:pk = pk + xy[N+i]<<(64N) + p*q + CF<<(64N), then pk >>= 64
-        # (the shift is the rotation: pk[0] = 0 becomes the new top limb)
-        mulAdd2(pk, ptr(pxy + (N + i) * 8), pp, tt, CF, i > 0, i < N-1)
-        if i < N-1:
-          pk = rotatePack(pk)
-      pk0 = pk[0] # pk[0] = 0, reused as a temporary
-      zp = pk[1:]
-      keep = [pxy, rax, rdx, tt, CF, pk0][0:N]
-      assert len(keep) == N
-      mov_pp(keep, zp)
-      sub_pm(zp, pp) # z -= p
-      cmovc_pp(zp, keep)
-      store_mp(pz, zp)
+      mod_body(sf.p[0], sf.p[1], sf.t[0:N+1], sf.t[N+1], sf.t[N+2], sf.t[N+3], mont)
 
-# mulPre: z[2N] = x[N] * y[N] (schoolbook, no reduction) with adcx/adox rows
-# (mulAdd), i.e. gen_mul without the Montgomery step. After row i, pk[0] is
-# final (= z[i]) and is stored immediately; rotatePack shifts the window.
-# Unlike gen_mul, no final subtraction is needed, so N+3 temps suffice even
-# for N=6 (no spill).
+# body of mulPre: z[2N] = x[N] * y[N] (schoolbook, no reduction) with
+# adcx/adox rows (mulAdd), i.e. gen_mul without the Montgomery step. After
+# row i, pk[0] is final (= z[i]) and is stored immediately; rotatePack shifts
+# the window. pk has N+1 registers; t, t2 are temporaries. Uses rax, rdx.
+def mulPre_body(pz, px, py, pk, t, t2, N):
+  for i in range(N):
+    mov(rdx, ptr(py + i * 8))
+    if i == 0:
+      # pk[N..0] = x * y[0]
+      mulPack1(pk, px, t)
+    else:
+      # pk[N..0] = pk[N-1..0] + x * y[i]
+      mulAdd(pk, px, t, t2, True)
+    mov(ptr(pz + i * 8), pk[0]) # z[i] is final after row i
+    pk = rotatePack(pk)
+  # the upper half: z[N..2N-1] = pk[0..N-1]
+  for j in range(N):
+    mov(ptr(pz + (N + j) * 8), pk[j])
+
+# mulPre: z[2N] = x[N] * y[N]. Unlike gen_mul, no final subtraction is
+# needed, so N+3 temps suffice even for N=6 (no spill).
 def gen_mulPre(name, mont):
   N = mont.pn
   align(16)
   with FuncProc(name):
     with StackFrame(3, N+3, useRDX=True) as sf:
-      pz = sf.p[0]
-      px = sf.p[1]
-      py = sf.p[2]
-      pk = sf.t[0:N+1]
-      t = sf.t[N+1]
-      t2 = sf.t[N+2]
-      for i in range(N):
-        mov(rdx, ptr(py + i * 8))
-        if i == 0:
-          # pk[N..0] = x * y[0]
-          mulPack1(pk, px, t)
-        else:
-          # pk[N..0] = pk[N-1..0] + x * y[i]
-          mulAdd(pk, px, t, t2, True)
-        mov(ptr(pz + i * 8), pk[0]) # z[i] is final after row i
-        pk = rotatePack(pk)
-      # the upper half: z[N..2N-1] = pk[0..N-1]
-      for j in range(N):
-        mov(ptr(pz + (N + j) * 8), pk[j])
+      mulPre_body(sf.p[0], sf.p[1], sf.p[2], sf.t[0:N+1], sf.t[N+1], sf.t[N+2], N)
 
 # mulPre: z[2N] = x[N] * y[N] (schoolbook, no reduction), built from the same
 # mulx-only rows (mulRow_wo_adx) as gen_mul_wo_adx but without the Montgomery
@@ -754,6 +752,146 @@ def gen_sqrPre(name, mont):
       else:
         sqrPre6(py, px, sf.t)
 
+# The register sequence assigned by StackFrame(pNum, tNum, useRDX=True),
+# without emitting the prologue: same logic as StackFrame.getRegIdx (rdx is
+# replaced by r11 and r11 itself is skipped), on top of getReg() which
+# follows the current ABI (SysV or Win64). Local subroutines (gen_mulPreL,
+# gen_modL) use it so that their register contract is identical to the
+# corresponding public function, while the caller's StackFrame is responsible
+# for saving the callee-saved registers. Since the assignment is positional,
+# a frame with more arguments/temps assigns the same prefix, so the caller's
+# sf.p[i] is the callee's p[i] on both ABIs.
+def getFrameRegs(pNum, tNum):
+  regs = []
+  pos = 0
+  while len(regs) < pNum + tNum:
+    r = getReg(pos)
+    pos += 1
+    if r == rdx:
+      r = r11
+    elif r == r11:
+      r = getReg(pos)
+      pos += 1
+    regs.append(r)
+  return (regs[0:pNum], regs[pNum:pNum+tNum])
+
+# local subroutine version of mulPre, called by call(label).
+# Contract: (z, x, y) in StackFrame(3, *, useRDX=True).p (rdi, rsi, r11 on
+# SysV); clobbers rax, rdx and the temp registers, so the caller's frame
+# must have saved the callee-saved ones among them.
+def gen_mulPreL(label, mont):
+  N = mont.pn
+  (p, t) = getFrameRegs(3, N+3)
+  align(16)
+  L(label)
+  mulPre_body(p[0], p[1], p[2], t[0:N+1], t[N+1], t[N+2], N)
+  ret()
+
+# local subroutine version of mod (Montgomery reduction).
+# Contract: (z, xy) in StackFrame(2, *, useRDX=True).p (rdi, rsi on SysV);
+# clobbers rax, rdx and the temp registers (r11 included), so the caller's
+# frame must have saved the callee-saved ones among them.
+def gen_modL(label, mont):
+  N = mont.pn
+  assert N <= 6
+  assert not mont.isFullBit
+  (p, t) = getFrameRegs(2, N+4)
+  align(16)
+  L(label)
+  mod_body(p[0], p[1], t[0:N+1], t[N+1], t[N+2], t[N+3], mont)
+  ret()
+
+# Fp2 mul: (z.a, z.b) = (a c - b d, a d + b c) where x = (a, b), y = (c, d),
+# each component N limbs in Montgomery form, b at byte offset*8 from a.
+# Port of mcl's gen_fp2_mul + fp2Dbl_mulPreL (fp_generator.hpp): Karatsuba
+# with 3 mulPre and 2 Montgomery reductions via the local subroutines
+# mulPreL/modL (the caller's StackFrame saves the registers they clobber).
+#   s = a + b, t = c + d (raw add; no carry out since p is not full bit)
+#   d1 = s t, d0 = a c, d2 = b d
+#   d1 -= d0; d1 -= d2 (= a d + b c; no borrow since s t >= a c + b d)
+#   d0 -= d2 (mod p 2^(64N): raw sub on the low half, then the high half is
+#     an fp_sub with the borrow carried in; the result is < p 2^(64N))
+#   z.a = mod(d0), z.b = mod(d1)
+def gen_fp2_mul(name, mont, offset, mulPreL, modL):
+  N = mont.pn
+  assert offset >= N
+  FpByte = offset * 8
+  align(16)
+  with FuncProc(name):
+    assert not mont.isFullBit
+    # stack: saved z, x, y + s[N] + t[N] + d0[2N] + d1[2N] + d2[2N]
+    S_z = 0
+    S_x = 8
+    S_y = 16
+    S_s = 24
+    S_t = S_s + N * 8
+    S_d0 = S_t + N * 8
+    S_d1 = S_d0 + N * 16
+    S_d2 = S_d1 + N * 16
+    with StackFrame(3, 10, useRDX=True, stackSizeByte=S_d2 + N * 16) as sf:
+      # sf.p matches the p of mulPreL/modL (positional prefix, see getFrameRegs)
+      pz = sf.p[0]
+      px = sf.p[1]
+      py = sf.p[2]
+      mov(ptr(rsp + S_z), pz)
+      mov(ptr(rsp + S_x), px)
+      mov(ptr(rsp + S_y), py)
+      # s = x.a + x.b, t = y.a + y.b
+      for (src, dst) in [(px, S_s), (py, S_t)]:
+        for i in range(N):
+          mov(rax, ptr(src + i * 8))
+          add_ex(rax, ptr(src + FpByte + i * 8), i == 0)
+          mov(ptr(rsp + dst + i * 8), rax)
+      # d1 = s * t
+      lea(pz, ptr(rsp + S_d1))
+      lea(px, ptr(rsp + S_s))
+      lea(py, ptr(rsp + S_t))
+      call(mulPreL)
+      # d0 = x.a * y.a
+      lea(pz, ptr(rsp + S_d0))
+      mov(px, ptr(rsp + S_x))
+      mov(py, ptr(rsp + S_y))
+      call(mulPreL)
+      # d2 = x.b * y.b
+      lea(pz, ptr(rsp + S_d2))
+      mov(px, ptr(rsp + S_x))
+      mov(py, ptr(rsp + S_y))
+      add(px, FpByte)
+      add(py, FpByte)
+      call(mulPreL)
+      # d1 -= d0; d1 -= d2 (2N limbs each; no borrow out)
+      for off in [S_d0, S_d2]:
+        for i in range(N * 2):
+          mov(rax, ptr(rsp + S_d1 + i * 8))
+          sub_ex(rax, ptr(rsp + off + i * 8), i == 0)
+          mov(ptr(rsp + S_d1 + i * 8), rax)
+      # d0 -= d2 (mod p 2^(64N)); low half: raw sub through rax
+      for i in range(N):
+        mov(rax, ptr(rsp + S_d0 + i * 8))
+        sub_ex(rax, ptr(rsp + S_d2 + i * 8), i == 0)
+        mov(ptr(rsp + S_d0 + i * 8), rax)
+      # high half: continue the borrow, then add p if it underflowed
+      # (the same pointer-cmov trick as gen_fp2_sub)
+      t = sf.t[0:N]
+      pp = sf.t[N]
+      for i in range(N):
+        mov(t[i], ptr(rsp + S_d0 + (N + i) * 8))
+        sbb(t[i], ptr(rsp + S_d2 + (N + i) * 8))
+      lea(rax, ptr(rip + 'zero'))
+      lea(pp, ptr(rip + 'p'))
+      cmovc(rax, pp)
+      for i in range(N):
+        add_ex(t[i], ptr(rax + i * 8), i == 0)
+        mov(ptr(rsp + S_d0 + (N + i) * 8), t[i])
+      # z.a = mod(d0), z.b = mod(d1)
+      mov(pz, ptr(rsp + S_z))
+      lea(px, ptr(rsp + S_d0))
+      call(modL)
+      mov(pz, ptr(rsp + S_z))
+      add(pz, FpByte)
+      lea(px, ptr(rsp + S_d1))
+      call(modL)
+
 def main():
   parser = getDefaultParser('gen bint')
   parser.add_argument('-p', type=str, default='', help='characteristic of a finite field')
@@ -768,6 +906,7 @@ def main():
   parser.add_argument('-mulPre_wo_adx', action='store_true', default=False, help='add mulPre function without adcx/adox (N=4, 6 only)')
   parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
   parser.add_argument('-sqrPre', action='store_true', default=False, help='add sqrPre function (z[2N] = x^2, no reduction, N=4, 6 only)')
+  parser.add_argument('-fp2_mul', action='store_true', default=False, help='add Fp2 mul function (Karatsuba + Montgomery reduction)')
   opt = parser.parse_args()
 
   init(opt)
@@ -810,6 +949,12 @@ def main():
     gen_mod(f'{opt.pre}mod', mont)
   if opt.sqrPre:
     gen_sqrPre(f'{opt.pre}sqrPre', mont)
+  if opt.fp2_mul and not mont.isFullBit:
+    mulPreL = Label()
+    modL = Label()
+    gen_mulPreL(mulPreL, mont)
+    gen_modL(modL, mont)
+    gen_fp2_mul(f'{pre2}mul', mont, opt.offset, mulPreL, modL)
 
   term()
 

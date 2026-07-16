@@ -25,8 +25,27 @@
 
 #ifdef USE_CLK
 #include <cybozu/benchmark.hpp>
+#include <chrono>
+#include <thread>
 #else
 #include <chrono>
+#endif
+
+#ifdef USE_CLK
+// Estimate the invariant TSC frequency by comparing rdtsc with steady_clock
+// across a sleep. The sleep may oversleep (esp. on Windows); that is fine
+// because the actual elapsed time is measured by the clock pair.
+uint64_t getTscFreq()
+{
+	using namespace std::chrono;
+	auto t0 = steady_clock::now();
+	uint64_t c0 = cybozu::CpuClock::getCpuClk();
+	std::this_thread::sleep_for(milliseconds(100));
+	auto t1 = steady_clock::now();
+	uint64_t c1 = cybozu::CpuClock::getCpuClk();
+	double sec = duration_cast<nanoseconds>(t1 - t0).count() * 1e-9;
+	return uint64_t((c1 - c0) / sec);
+}
 #endif
 
 using namespace mcl;
@@ -80,6 +99,8 @@ extern "C" {
 	void x64_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void x642_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void x64_mul(uint64_t*, const uint64_t*, const uint64_t*);
+	// Fp2 mul (Karatsuba: 3 mulPre + 2 Montgomery reductions)
+	void x642_mul(uint64_t*, const uint64_t*, const uint64_t*);
 	// mulx-only variant (no adcx/adox) for pre-Broadwell CPUs
 	void x64_mul_wo_adx(uint64_t*, const uint64_t*, const uint64_t*);
 	// z[2N] = x[N] * y[N] (no reduction), adcx/adox rows like x64_mul
@@ -96,6 +117,7 @@ extern "C" {
 	#define x64_sub nullptr
 	#define x642_sub nullptr
 	#define x64_mul nullptr
+	#define x642_mul nullptr
 	#define x64_mul_wo_adx nullptr
 	#define x64_mulPre nullptr
 	#define x64_mulPre_wo_adx nullptr
@@ -281,7 +303,7 @@ int main(int argc, char *argv[]) {
 	int mode;
 	cybozu::Option opt;
 	std::vector<std::string> vs;
-	opt.appendVec(&vs, "set", ": select from {add,sub,add2,sub2,mul,mulPre,mod,sqrPre}");
+	opt.appendVec(&vs, "set", ": select from {add,sub,add2,sub2,mul,mul2,mulPre,mod,sqrPre}");
 	opt.appendOpt(&mode, TEST_MODE | BENCH_MODE, "mode", ": test(1), bench(2), both(3), default(3)");
 	opt.appendHelp("h");
 	if (!opt.parse(argc, argv)) {
@@ -302,7 +324,8 @@ int main(int argc, char *argv[]) {
 
 	if (mode & BENCH_MODE) {
 #ifdef USE_CLK
-		printf("unit: clk/op (smaller is faster); base = mcl, (Nx) = time / base\n");
+		printf("tsc freq: %.6g GHz\n", getTscFreq() * 1e-9);
+		printf("unit: tsc/op (smaller is faster); base = mcl, (Nx) = time / base\n");
 #else
 		printf("unit: ns/op (smaller is faster); base = mcl, (Nx) = time / base\n");
 #endif
@@ -330,6 +353,9 @@ int main(int argc, char *argv[]) {
 	}
 	if (ss.empty() || ss.find("mul") != ss.end()) {
 		check_and_bench(mode, "mul", C2, Fp::mul, {llvm_mul, x64_mul, x64_mul_wo_adx});
+	}
+	if (ss.empty() || ss.find("mul2") != ss.end()) {
+		check_and_bench(mode, "mul2", C2, Fp2::mul, std::initializer_list<FpOp>{nullptr, x642_mul});
 	}
 	if (ss.empty() || ss.find("mulPre") != ss.end()) {
 		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, std::initializer_list<FpOp>{llvm_mulPre, x64_mulPre, x64_mulPre_wo_adx});

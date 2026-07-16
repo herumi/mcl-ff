@@ -92,7 +92,7 @@ test: $(BENCH_EXE)
 src/bench_llvm.ll: src/gen_ff.py $(GEN_STAMP)
 	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul -mod -mulPre -sqrPre > $@
 src/bench_x64.S: src/gen_ff_x64.py $(GEN_STAMP)
-	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul -mul_wo_adx -mulPre -mulPre_wo_adx -mod -sqrPre > $@
+	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul -mul_wo_adx -mulPre -mulPre_wo_adx -mod -sqrPre -fp2_mul > $@
 obj/bench_llvm.o: src/bench_llvm.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
 $(BENCH_X64_OBJ): src/bench_x64.S
