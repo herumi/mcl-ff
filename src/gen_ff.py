@@ -292,7 +292,7 @@ def gen_mod(name, mont, dataVar, mulUnit):
   resetGlobalIdx()
   pz = IntPtr(unit)
   pxy = IntPtr(unit)
-  with Function(name, Void, pz, pxy):
+  with Function(name, Void, pz, pxy) as f:
     pp = bitcast(dataVar, unit)
     ipval = mont.ip
     p = loadN(pp, N)
@@ -329,6 +329,7 @@ def gen_mod(name, mont, dataVar, mulUnit):
       z = select(c, t, vc)
     storeN(z, pz)
     ret(Void)
+  return f
 
 # pz[2N] = px[N] * py[N] (no reduction). Port of gen.py:generic_fpDbl_mul of
 # mcl: schoolbook rows x * y[i] accumulated in the bit+unit accumulator t, whose
@@ -403,6 +404,60 @@ def gen_sqrPre(name, N, mulPreF):
     storeN(z, pz)
     ret(Void)
 
+# Fp2 mul: (z.a, z.b) = (a c - b d, a d + b c) where x = (a, b), y = (c, d),
+# each component N limbs in Montgomery form, b at offset limbs from a.
+# Same Karatsuba structure as gen_fp2_mul of gen_ff_x64.py:
+#   s = a + b, t = c + d (no carry out since p is not full bit)
+#   d1 = s t, d0 = a c, d2 = b d (3 mulPre calls on alloca buffers)
+#   d1 -= d0; d1 -= d2 (= a d + b c; no borrow since s t >= a c + b d)
+#   d0 -= d2 (mod p 2^bit: on borrow, add p to the high half; the +p comes
+#     from the writable {zero, p} table like gen_sub_raw_tbl, so it lowers
+#     to an add chain with memory operands instead of a 2N-limb select)
+#   z.a = mod(d0), z.b = mod(d1)
+def gen_fp2_mul(name, mont, mulPreF, modF, subTbl, offset):
+  N = mont.pn
+  bit = unit * N
+  bit2 = bit * 2
+  resetGlobalIdx()
+  pz = IntPtr(unit)
+  px = IntPtr(unit)
+  py = IntPtr(unit)
+  with Function(name, Void, pz, px, py):
+    tbl, Npad = subTbl
+    ptbl = bitcast(tbl, unit)
+    ps = alloca_(unit, N)
+    pt = alloca_(unit, N)
+    pd0 = alloca_(unit, 2*N)
+    pd1 = alloca_(unit, 2*N)
+    pd2 = alloca_(unit, 2*N)
+    a = loadN(px, N)
+    b = loadN(px, N, offset=offset)
+    c = loadN(py, N)
+    d = loadN(py, N, offset=offset)
+    storeN(add(a, b), ps)
+    storeN(add(c, d), pt)
+    call(mulPreF, pd1, ps, pt)
+    call(mulPreF, pd0, px, py)
+    call(mulPreF, pd2, getelementptr(px, offset), getelementptr(py, offset))
+    d0 = loadN(pd0, 2*N)
+    d1 = loadN(pd1, 2*N)
+    d2 = loadN(pd2, 2*N)
+    d1 = sub(sub(d1, d0), d2)
+    storeN(d1, pd1)
+    v = sub(d0, d2)
+    # borrow flag: d0, d2 < p^2 < 2^(bit2-2), so the top bit is set iff
+    # the sub wrapped around
+    c = trunc(lshr(v, bit2 - 1), 1)
+    off = shl(zext(c, unit), Npad.bit_length() - 1)
+    addr = getelementptr(ptbl, off)
+    pc = load(bitcast(addr, bit)) # p if borrow else 0
+    hi = add(trunc(lshr(v, bit), bit), pc)
+    storeN(trunc(v, bit), pd0)
+    storeN(hi, pd0, offset=N)
+    call(modF, pz, pd0)
+    call(modF, getelementptr(pz, offset), pd1)
+    ret(Void)
+
 def gen_get_prime(name, pStr):
   resetGlobalIdx()
   r = IntPtr(8, const=True)
@@ -425,6 +480,7 @@ def main():
   parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
   parser.add_argument('-mulPre', action='store_true', default=False, help='add mulPre function (z[2N] = x*y, no reduction)')
   parser.add_argument('-sqrPre', action='store_true', default=False, help='add sqrPre function (z[2N] = x^2, no reduction)')
+  parser.add_argument('-fp2_mul', action='store_true', default=False, help='add Fp2 mul function (Karatsuba + Montgomery reduction)')
 
   opt = parser.parse_args()
   if opt.n == 0:
@@ -435,6 +491,9 @@ def main():
   opt.pre2 = opt.pre[:-1] + '2_'
   if opt.sqrPre and USE_MULPRE_FOR_SQRPRE:
     opt.mulPre = True
+  if opt.fp2_mul:
+    opt.mulPre = True
+    opt.mod = True
 
   global mont, unit, unit2
   mont = Montgomery(opt.p, opt.u)
@@ -447,6 +506,7 @@ def main():
     opt.mod = True
     opt.mulPre = True
     opt.sqrPre = True
+    opt.fp2_mul = True
     showPrototype()
 
   dataVar = makeVar('p', mont.bit, mont.p, const=False, static=False)
@@ -455,11 +515,13 @@ def main():
 
   gen_get_prime(f'{opt.pre}get_prime', pStr)
 
+  subTbl = None
+  if opt.sub or opt.fp2_mul:
+    subTbl = makeSubTbl(opt.pre, mont)
   if opt.add:
     gen_fp_add(f'{opt.pre}add', mont.pn, dataVar)
     gen_fp2_add(f'{opt.pre2}add', mont.pn, dataVar, opt.offset)
   if opt.sub:
-    subTbl = makeSubTbl(opt.pre, mont)
     gen_fp_sub(f'{opt.pre}sub', mont.pn, subTbl)
     gen_fp2_sub(f'{opt.pre2}sub', mont.pn, subTbl, opt.offset)
 
@@ -470,13 +532,16 @@ def main():
 
   if opt.mul:
     gen_mul(f'{opt.pre}mul', mont, dataVar, mulUnit)
+  modF = None
   if opt.mod:
-    gen_mod(f'{opt.pre}mod', mont, dataVar, mulUnit)
+    modF = gen_mod(f'{opt.pre}mod', mont, dataVar, mulUnit)
   mulPreF = None
   if opt.mulPre:
     mulPreF = gen_mulPre(f'{opt.pre}mulPre', mont.pn, mulUnit)
   if opt.sqrPre:
     gen_sqrPre(f'{opt.pre}sqrPre', mont.pn, mulPreF)
+  if opt.fp2_mul and not mont.isFullBit:
+    gen_fp2_mul(f'{opt.pre2}mul', mont, mulPreF, modF, subTbl, opt.offset)
 
   term()
 

@@ -87,6 +87,8 @@ extern "C" {
 	void llvm_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm2_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_mul(uint64_t*, const uint64_t*, const uint64_t*);
+	// Fp2 mul (Karatsuba: 3 mulPre + 2 Montgomery reductions)
+	void llvm2_mul(uint64_t*, const uint64_t*, const uint64_t*);
 	// z[2N] = x[N] * y[N] (no reduction)
 	void llvm_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
 	// z[N] = xy[2N] R^-1 mod p (Montgomery reduction)
@@ -355,7 +357,7 @@ int main(int argc, char *argv[]) {
 		check_and_bench(mode, "mul", C2, Fp::mul, {llvm_mul, x64_mul, x64_mul_wo_adx});
 	}
 	if (ss.empty() || ss.find("mul2") != ss.end()) {
-		check_and_bench(mode, "mul2", C2, Fp2::mul, std::initializer_list<FpOp>{nullptr, x642_mul});
+		check_and_bench(mode, "mul2", C2, Fp2::mul, {llvm2_mul, x642_mul});
 	}
 	if (ss.empty() || ss.find("mulPre") != ss.end()) {
 		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, std::initializer_list<FpOp>{llvm_mulPre, x64_mulPre, x64_mulPre_wo_adx});
