@@ -44,10 +44,11 @@ CFLAGS=-Wall -Wextra -I ./include -I $(MCL_DIR)/include -fPIC -g
 LDFLAGS=$(MCL_FF_OBJ) $(MCL_LIB)
 
 ifeq ($(ARCH),x86_64)
-  GEN_OPT=-add -sub
-  CFLAGS+=-mbmi2
+GEN_OPT=-add -sub
+CFLAGS+=-mbmi2 -DMCL_X64_ASM
+BENCH_X64_OBJ=obj/bench_x64.o
 else
-  GEN_OPT=-add -sub -mul
+GEN_OPT=-add -sub -mul
 endif
 
 ifeq ($(ARCH),x86_64)
@@ -87,16 +88,19 @@ test: $(BENCH_EXE)
 	$(BENCH_EXE) -mode 1
 #	@sh -ec 'for i in $(TEST_EXE); do echo $$i; env LSAN_OPTIONS=verbosity=0:log_threads=1 ./$$i; done'
 
-# Generate add/sub/mul from gen_ff.py (LLVM) and gen_ff_x64.py (x64 asm) under
-# distinct prefixes and compare them within a single executable (test/bench.cpp).
+# Generate add/sub/mul from gen_ff.py (LLVM) and, on x86_64, gen_ff_x64.py
+# (x64 asm) under distinct prefixes and compare them within a single executable
+# (test/bench.cpp).
 src/bench_llvm.ll: src/gen_ff.py $(GEN_STAMP)
 	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul -mod -mulPre -sqrPre -fp2_mul > $@
-src/bench_x64.S: src/gen_ff_x64.py $(GEN_STAMP)
-	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul -mul_wo_adx -mulPre -mulPre_wo_adx -mod -sqrPre -fp2_mul > $@
 obj/bench_llvm.o: src/bench_llvm.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
+ifeq ($(ARCH),x86_64)
+src/bench_x64.S: src/gen_ff_x64.py $(GEN_STAMP)
+	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul -mul_wo_adx -mulPre -mulPre_wo_adx -mod -sqrPre -fp2_mul > $@
 $(BENCH_X64_OBJ): src/bench_x64.S
 	$(CXX) -c -o $@ $< -fPIC
+endif
 $(BENCH_EXE): test/bench.cpp obj/bench_llvm.o $(BENCH_X64_OBJ) $(HEADER)
 	$(CXX) -o $@ $< obj/bench_llvm.o $(BENCH_X64_OBJ) $(CFLAGS) $(MCL_LIB)
 bench: $(BENCH_EXE)
