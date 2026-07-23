@@ -114,17 +114,19 @@ extern "C" {
 	// z[2N] = x[N]^2 (no reduction), hand-scheduled mulx + add/adc
 	void x64_sqrPre(uint64_t*, const uint64_t*);
 #else
-	#define x64_add nullptr
-	#define x642_add nullptr
-	#define x64_sub nullptr
-	#define x642_sub nullptr
-	#define x64_mul nullptr
-	#define x642_mul nullptr
-	#define x64_mul_wo_adx nullptr
-	#define x64_mulPre nullptr
-	#define x64_mulPre_wo_adx nullptr
-	#define x64_mod nullptr
-	#define x64_sqrPre nullptr
+	// typed nullptr so that initializer_list<LowOp> deduction does not
+	// conflict with the function-pointer elements on non-x64
+	#define x64_add ((FpOp)nullptr)
+	#define x642_add ((FpOp)nullptr)
+	#define x64_sub ((FpOp)nullptr)
+	#define x642_sub ((FpOp)nullptr)
+	#define x64_mul ((FpOp)nullptr)
+	#define x642_mul ((FpOp)nullptr)
+	#define x64_mul_wo_adx ((FpOp)nullptr)
+	#define x64_mulPre ((FpOp)nullptr)
+	#define x64_mulPre_wo_adx ((FpOp)nullptr)
+	#define x64_mod ((FpOp1)nullptr)
+	#define x64_sqrPre ((FpOp1)nullptr)
 #endif
 }
 

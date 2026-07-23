@@ -1,5 +1,5 @@
 PYTHON?=python3
-CLANG?=clang++-20
+CLANG?=clang++
 # use CXX as the LLVM compiler only when it is a clang variant
 ifneq ($(findstring clang,$(CXX)),)
   CLANG=$(CXX)
@@ -39,7 +39,7 @@ FORCE:
 $(GEN_STAMP): FORCE
 	@echo '$(TYPE) $(BIT) $(NAME)' | cmp -s - $@ || echo '$(TYPE) $(BIT) $(NAME)' > $@
 
-CFLAGS=-Wall -Wextra -I ./include -I $(MCL_DIR)/include -fPIC -g
+CFLAGS=-std=c++17 -Wall -Wextra -I ./include -I $(MCL_DIR)/include -fPIC -g
 #CFLAGS+=-Wno-unused-command-line-argument -Wno-override-module
 LDFLAGS=$(MCL_FF_OBJ) $(MCL_LIB)
 
