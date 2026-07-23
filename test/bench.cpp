@@ -17,7 +17,7 @@
 #include <cybozu/option.hpp>
 #include <set>
 
-#define USE_CLK
+//#define USE_CLK
 
 #ifndef MCL_X64_ASM
 	#undef USE_CLK
