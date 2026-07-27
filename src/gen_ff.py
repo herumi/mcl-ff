@@ -148,34 +148,68 @@ def gen_sub_raw_tbl(x, y, ptbl, Npad, isFullBit):
   v = add(v, p)
   return v
 
-def gen_fp_sub(name, N, subTbl):
+# Reduction via an and-mask: p is loaded from a fixed address known at
+# function entry, so the load runs in parallel with the subtraction and only
+# sext -> and -> add follow the borrow. The table variant instead derives the
+# load address from the borrow, which puts the L1 load-use latency (~4 cycles)
+# on the dependency chain when the borrow pattern defeats address prediction;
+# on aarch64 this made sub latency 1.23x of mcl. On x64 the table still wins
+# because it lowers to add/adc with folded memory operands, so this variant is
+# selected by -sub_mask (passed by the Makefile on non-x86_64).
+def gen_sub_raw_mask(x, y, p, isFullBit):
+  bit = x.bit
+  if isFullBit:
+    x = zext(x, bit + unit)
+    y = zext(y, bit + unit)
+    v = sub(x, y)
+    c = trunc(lshr(v, bit), 1)
+    v = trunc(v, bit)
+  else:
+    v = sub(x, y)
+    c = trunc(lshr(v, bit - 1), 1)
+  v = add(v, and_(p, sext(c, bit)))
+  return v
+
+def gen_fp_sub(name, N, subTbl, dataVar, useMask):
   bit = unit * N
   resetGlobalIdx();
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
   with Function(name, Void, pz, px, py):
-    tbl, Npad = subTbl
-    ptbl = bitcast(tbl, unit)
+    if useMask:
+      p = loadN(bitcast(dataVar, unit), N)
+    else:
+      tbl, Npad = subTbl
+      ptbl = bitcast(tbl, unit)
     x = loadN(px, N, volatile=True)
     y = loadN(py, N, volatile=True)
-    v = gen_sub_raw_tbl(x, y, ptbl, Npad, mont.isFullBit)
+    if useMask:
+      v = gen_sub_raw_mask(x, y, p, mont.isFullBit)
+    else:
+      v = gen_sub_raw_tbl(x, y, ptbl, Npad, mont.isFullBit)
     storeN(v, pz)
     ret(Void)
 
-def gen_fp2_sub(name, N, subTbl, offset):
+def gen_fp2_sub(name, N, subTbl, dataVar, useMask, offset):
   bit = unit * N
   resetGlobalIdx();
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
   with Function(name, Void, pz, px, py):
-    tbl, Npad = subTbl
-    ptbl = bitcast(tbl, unit)
+    if useMask:
+      p = loadN(bitcast(dataVar, unit), N)
+    else:
+      tbl, Npad = subTbl
+      ptbl = bitcast(tbl, unit)
     for i in range(2):
       x = loadN(px, N, offset=i*offset, volatile=True)
       y = loadN(py, N, offset=i*offset, volatile=True)
-      v = gen_sub_raw_tbl(x, y, ptbl, Npad, mont.isFullBit)
+      if useMask:
+        v = gen_sub_raw_mask(x, y, p, mont.isFullBit)
+      else:
+        v = gen_sub_raw_tbl(x, y, ptbl, Npad, mont.isFullBit)
       storeN(v, pz, offset=i*offset)
 
     ret(Void)
@@ -564,6 +598,7 @@ def main():
   parser.add_argument('-addn', type=int, default=0, help='mad size of add/sub')
   parser.add_argument('-add', action='store_true', default=False, help='add add function')
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
+  parser.add_argument('-sub_mask', action='store_true', default=False, help='use an and-mask for the conditional +p in sub instead of the {0,p} table (faster on aarch64)')
   parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
   parser.add_argument('-sqr', action='store_true', default=False, help='add sqr function (a call to mul(z, x, x))')
   parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
@@ -612,14 +647,14 @@ def main():
   gen_get_prime(f'{opt.pre}get_prime', pStr)
 
   subTbl = None
-  if opt.sub or opt.fp2_mul:
+  if (opt.sub and not opt.sub_mask) or opt.fp2_mul:
     subTbl = makeSubTbl(opt.pre, mont)
   if opt.add:
     gen_fp_add(f'{opt.pre}add', mont.pn, dataVar)
     gen_fp2_add(f'{opt.pre2}add', mont.pn, dataVar, opt.offset)
   if opt.sub:
-    gen_fp_sub(f'{opt.pre}sub', mont.pn, subTbl)
-    gen_fp2_sub(f'{opt.pre2}sub', mont.pn, subTbl, opt.offset)
+    gen_fp_sub(f'{opt.pre}sub', mont.pn, subTbl, dataVar, opt.sub_mask)
+    gen_fp2_sub(f'{opt.pre2}sub', mont.pn, subTbl, dataVar, opt.sub_mask, opt.offset)
 
   mulUU = gen_mulUU()
   extractHigh = gen_extractHigh()

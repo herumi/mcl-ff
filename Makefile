@@ -48,7 +48,9 @@ GEN_OPT=-add -sub
 CFLAGS+=-mbmi2 -DMCL_X64_ASM
 BENCH_X64_OBJ=obj/bench_x64.o
 else
-GEN_OPT=-add -sub -mul
+# and-mask sub reduction: faster than the {0,p} table on aarch64
+SUB_OPT=-sub_mask
+GEN_OPT=-add -sub -mul $(SUB_OPT)
 endif
 
 ifeq ($(ARCH),x86_64)
@@ -99,7 +101,7 @@ test: $(BENCH_EXE)
 # (x64 asm) under distinct prefixes and compare them within a single executable
 # (test/bench.cpp).
 src/bench_llvm.ll: src/gen_ff.py $(GEN_STAMP)
-	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul -sqr -mod -mulPre -sqrPre -fp2_mul -fp2_sqr > $@
+	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul -sqr -mod -mulPre -sqrPre -fp2_mul -fp2_sqr $(SUB_OPT) > $@
 obj/bench_llvm.o: src/bench_llvm.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
 ifeq ($(ARCH),x86_64)
