@@ -752,6 +752,30 @@ def gen_sqrPre(name, mont):
       else:
         sqrPre6(py, px, sf.t)
 
+# Fused sqr with Montgomery reduction: z[N] = x[N]^2 R^(-1) mod p.
+# sqrPre4/sqrPre6 write the 2N-limb square to a stack buffer and mod_body
+# reduces it within the same frame, so the two call/ret + prologue pairs of a
+# separate sqrPre + mod call sequence are removed (the intermediate still
+# goes through the stack; mod_body reads it as memory operands).
+def gen_sqr(name, mont):
+  N = mont.pn
+  assert N in (4, 6)
+  align(16)
+  with FuncProc(name):
+    assert not mont.isFullBit
+    # sqrPre needs 11 temps, mod_body N+4 (<= 10): 11 covers both
+    with StackFrame(2, 11, useRDX=True, stackSizeByte=2*N*8) as sf:
+      pz = sf.p[0]
+      px = sf.p[1]
+      if N == 4:
+        sqrPre4(rsp, px, sf.t)
+      else:
+        sqrPre6(rsp, px, sf.t)
+      # px is dead after sqrPre; reuse it as the xy pointer (mod_body
+      # clobbers it, so rsp itself cannot be passed)
+      mov(px, rsp)
+      mod_body(pz, px, sf.t[0:N+1], sf.t[N+1], sf.t[N+2], sf.t[N+3], mont)
+
 # The register sequence assigned by StackFrame(pNum, tNum, useRDX=True),
 # without emitting the prologue: same logic as StackFrame.getRegIdx (rdx is
 # replaced by r11 and r11 itself is skipped), on top of getReg() which
@@ -902,6 +926,7 @@ def main():
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
   parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
   parser.add_argument('-mul_wo_adx', action='store_true', default=False, help='add mul function without adcx/adox (N=4, 6 only)')
+  parser.add_argument('-sqr', action='store_true', default=False, help='add sqr function (fused sqrPre + Montgomery reduction, N=4, 6 only)')
   parser.add_argument('-mulPre', action='store_true', default=False, help='add mulPre function (z[2N] = x*y, no reduction)')
   parser.add_argument('-mulPre_wo_adx', action='store_true', default=False, help='add mulPre function without adcx/adox (N=4, 6 only)')
   parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
@@ -941,6 +966,8 @@ def main():
   if opt.mul_wo_adx and not mont.isFullBit:
     name = f'{opt.pre}mul_wo_adx'
     gen_mul_wo_adx(name, mont)
+  if opt.sqr and not mont.isFullBit:
+    gen_sqr(f'{opt.pre}sqr', mont)
   if opt.mulPre:
     gen_mulPre(f'{opt.pre}mulPre', mont)
   if opt.mulPre_wo_adx:

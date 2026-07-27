@@ -87,6 +87,8 @@ extern "C" {
 	void llvm_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm2_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_mul(uint64_t*, const uint64_t*, const uint64_t*);
+	// z = x^2 R^-1 mod p (fused sqrPre + Montgomery reduction)
+	void llvm_sqr(uint64_t*, const uint64_t*);
 	// Fp2 mul (Karatsuba: 3 mulPre + 2 Montgomery reductions)
 	void llvm2_mul(uint64_t*, const uint64_t*, const uint64_t*);
 	// z[2N] = x[N] * y[N] (no reduction)
@@ -105,6 +107,8 @@ extern "C" {
 	void x642_mul(uint64_t*, const uint64_t*, const uint64_t*);
 	// mulx-only variant (no adcx/adox) for pre-Broadwell CPUs
 	void x64_mul_wo_adx(uint64_t*, const uint64_t*, const uint64_t*);
+	// z = x^2 R^-1 mod p (fused sqrPre + Montgomery reduction)
+	void x64_sqr(uint64_t*, const uint64_t*);
 	// z[2N] = x[N] * y[N] (no reduction), adcx/adox rows like x64_mul
 	void x64_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
 	// z[2N] = x[N] * y[N] (no reduction), mulx-only like x64_mul_wo_adx
@@ -123,6 +127,7 @@ extern "C" {
 	#define x64_mul ((FpOp)nullptr)
 	#define x642_mul ((FpOp)nullptr)
 	#define x64_mul_wo_adx ((FpOp)nullptr)
+	#define x64_sqr ((FpOp1)nullptr)
 	#define x64_mulPre ((FpOp)nullptr)
 	#define x64_mulPre_wo_adx ((FpOp)nullptr)
 	#define x64_mod ((FpOp1)nullptr)
@@ -307,7 +312,7 @@ int main(int argc, char *argv[]) {
 	int mode;
 	cybozu::Option opt;
 	std::vector<std::string> vs;
-	opt.appendVec(&vs, "set", ": select from {add,sub,add2,sub2,mul,mul2,mulPre,mod,sqrPre}");
+	opt.appendVec(&vs, "set", ": select from {add,sub,add2,sub2,mul,sqr,mul2,mulPre,mod,sqrPre}");
 	opt.appendOpt(&mode, TEST_MODE | BENCH_MODE, "mode", ": test(1), bench(2), both(3), default(3)");
 	opt.appendHelp("h");
 	if (!opt.parse(argc, argv)) {
@@ -357,6 +362,9 @@ int main(int argc, char *argv[]) {
 	}
 	if (ss.empty() || ss.find("mul") != ss.end()) {
 		check_and_bench(mode, "mul", C2, Fp::mul, {llvm_mul, x64_mul, x64_mul_wo_adx});
+	}
+	if (ss.empty() || ss.find("sqr") != ss.end()) {
+		check_and_bench(mode, "sqr", C2, Fp::sqr, std::initializer_list<FpOp1>{llvm_sqr, x64_sqr});
 	}
 	if (ss.empty() || ss.find("mul2") != ss.end()) {
 		check_and_bench(mode, "mul2", C2, Fp2::mul, {llvm2_mul, x642_mul});

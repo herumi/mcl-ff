@@ -283,50 +283,60 @@ def gen_mul(name, mont, dataVar, mulUnit):
       storeN(z, pz)
     ret(Void)
 
-# Montgomery reduction: z = xy R^-1 mod p where xy has 2N units.
-def gen_mod(name, mont, dataVar, mulUnit):
+# Montgomery reduction core: reduce a 2N-unit value to z = xy R^-1 mod p and
+# return it (bit wide). The low N units come packed in lo; the high units are
+# fetched one per iteration via getHi(i) -> unit-wide limb N+i, so the caller
+# chooses the source (memory for gen_mod, an SSA value for gen_sqr).
+def mod_raw(lo, getHi, mont, pp, mulUnit):
   N = mont.pn
   bit = unit * N
   bu = bit + unit
   bu2 = bit + unit * 2
+  ipval = mont.ip
+  p = loadN(pp, N)
+  t = lo
+  H = None
+  for i in range(N):
+    if N == 1:
+      q = mul(t, ipval)
+    else:
+      q = mul(trunc(t, unit), ipval)
+    pq = call(mulUnit, pp, q)
+    if i > 0:
+      H = zext(H, bu)
+      H = shl(H, bit)
+      pq = add(pq, H)
+    nxt = getHi(i)
+    t = pack([t, nxt])
+    t = zext(t, bu2)
+    pq = zext(pq, bu2)
+    t = add(t, pq)
+    t = lshr(t, unit)
+    t = trunc(t, bu)
+    H, t = split(t, bit)
+  if mont.isFullBit:
+    p = zext(p, bu)
+    t = pack([t, H])
+    vc = sub(t, p)
+    c = trunc(lshr(vc, bit), 1)
+    z = select(c, t, vc)
+    z = trunc(z, bit)
+  else:
+    vc = sub(t, p)
+    c = trunc(lshr(vc, bit - 1), 1)
+    z = select(c, t, vc)
+  return z
+
+# Montgomery reduction: z = xy R^-1 mod p where xy has 2N units.
+def gen_mod(name, mont, dataVar, mulUnit):
+  N = mont.pn
   resetGlobalIdx()
   pz = IntPtr(unit)
   pxy = IntPtr(unit)
   with Function(name, Void, pz, pxy) as f:
     pp = bitcast(dataVar, unit)
-    ipval = mont.ip
-    p = loadN(pp, N)
-    t = loadN(pxy, N)
-    H = None
-    for i in range(N):
-      if N == 1:
-        q = mul(t, ipval)
-      else:
-        q = mul(trunc(t, unit), ipval)
-      pq = call(mulUnit, pp, q)
-      if i > 0:
-        H = zext(H, bu)
-        H = shl(H, bit)
-        pq = add(pq, H)
-      nxt = load(getelementptr(pxy, N + i))
-      t = pack([t, nxt])
-      t = zext(t, bu2)
-      pq = zext(pq, bu2)
-      t = add(t, pq)
-      t = lshr(t, unit)
-      t = trunc(t, bu)
-      H, t = split(t, bit)
-    if mont.isFullBit:
-      p = zext(p, bu)
-      t = pack([t, H])
-      vc = sub(t, p)
-      c = trunc(lshr(vc, bit), 1)
-      z = select(c, t, vc)
-      z = trunc(z, bit)
-    else:
-      vc = sub(t, p)
-      c = trunc(lshr(vc, bit - 1), 1)
-      z = select(c, t, vc)
+    lo = loadN(pxy, N)
+    z = mod_raw(lo, lambda i: load(getelementptr(pxy, N + i)), mont, pp, mulUnit)
     storeN(z, pz)
     ret(Void)
   return f
@@ -383,9 +393,27 @@ USE_MULPRE_FOR_SQRPRE = not True
 # full-width adds clang keeps 2N-limb values live and spills heavily.
 # Finally double the accumulator (each cross term appears twice by symmetry)
 # and add the diagonal squares x[i]^2, which tile the full 2N limbs exactly.
+def sqrPre_raw(x, N):
+  bit2 = unit * N * 2
+  if N == 1:
+    return mul(zext(x[0], unit2), zext(x[0], unit2))
+  acc = None
+  for d in range(N - 1, 0, -1):
+    row = pack([mul(zext(x[i], unit2), zext(x[i + d], unit2)) for i in range(N - d)])
+    if acc is None:
+      acc = row
+    else:
+      acc = add(shl(zext(acc, row.bit), unit), row)
+  acc = zext(acc, acc.bit + unit)
+  acc = add(acc, acc)
+  z = shl(zext(acc, bit2), unit)
+  # emit the diagonal mulx last, close to their only use: hoisting them to
+  # the top lengthens their live ranges and costs ~1 cycle in practice
+  diag = pack([mul(zext(x[i], unit2), zext(x[i], unit2)) for i in range(N)])
+  z = add(z, diag)
+  return z
+
 def gen_sqrPre(name, N, mulPreF):
-  bit = unit * N
-  bit2 = bit * 2
   resetGlobalIdx()
   pz = IntPtr(unit)
   px = IntPtr(unit)
@@ -395,24 +423,24 @@ def gen_sqrPre(name, N, mulPreF):
       ret(Void)
       return
     x = [load(getelementptr(px, i)) for i in range(N)]
-    if N == 1:
-      storeN(mul(zext(x[0], unit2), zext(x[0], unit2)), pz)
-      ret(Void)
-      return
-    acc = None
-    for d in range(N - 1, 0, -1):
-      row = pack([mul(zext(x[i], unit2), zext(x[i + d], unit2)) for i in range(N - d)])
-      if acc is None:
-        acc = row
-      else:
-        acc = add(shl(zext(acc, row.bit), unit), row)
-    acc = zext(acc, acc.bit + unit)
-    acc = add(acc, acc)
-    z = shl(zext(acc, bit2), unit)
-    # emit the diagonal mulx last, close to their only use: hoisting them to
-    # the top lengthens their live ranges and costs ~1 cycle in practice
-    diag = pack([mul(zext(x[i], unit2), zext(x[i], unit2)) for i in range(N)])
-    z = add(z, diag)
+    storeN(sqrPre_raw(x, N), pz)
+    ret(Void)
+
+# Fused sqr: z = x^2 R^-1 mod p. The 2N-unit product of sqrPre_raw stays in
+# one SSA value and is reduced in place by mod_raw, so the intermediate never
+# goes through memory and the call overhead of a sqrPre + mod pair is gone.
+def gen_sqr(name, mont, dataVar, mulUnit):
+  N = mont.pn
+  bit = unit * N
+  resetGlobalIdx()
+  pz = IntPtr(unit)
+  px = IntPtr(unit)
+  with Function(name, Void, pz, px):
+    pp = bitcast(dataVar, unit)
+    x = [load(getelementptr(px, i)) for i in range(N)]
+    xy = sqrPre_raw(x, N)
+    lo = trunc(xy, bit)
+    z = mod_raw(lo, lambda i: trunc(lshr(xy, bit + i * unit), unit), mont, pp, mulUnit)
     storeN(z, pz)
     ret(Void)
 
@@ -489,6 +517,7 @@ def main():
   parser.add_argument('-add', action='store_true', default=False, help='add add function')
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
   parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
+  parser.add_argument('-sqr', action='store_true', default=False, help='add sqr function (fused sqrPre + Montgomery reduction)')
   parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
   parser.add_argument('-mulPre', action='store_true', default=False, help='add mulPre function (z[2N] = x*y, no reduction)')
   parser.add_argument('-sqrPre', action='store_true', default=False, help='add sqrPre function (z[2N] = x^2, no reduction)')
@@ -515,6 +544,7 @@ def main():
     opt.add = True
     opt.sub = True
     opt.mul = True
+    opt.sqr = True
     opt.mod = True
     opt.mulPre = True
     opt.sqrPre = True
@@ -544,6 +574,8 @@ def main():
 
   if opt.mul:
     gen_mul(f'{opt.pre}mul', mont, dataVar, mulUnit)
+  if opt.sqr:
+    gen_sqr(f'{opt.pre}sqr', mont, dataVar, mulUnit)
   modF = None
   if opt.mod:
     modF = gen_mod(f'{opt.pre}mod', mont, dataVar, mulUnit)
