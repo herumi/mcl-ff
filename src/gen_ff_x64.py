@@ -249,6 +249,26 @@ def rotatePack(pk):
   t.append(pk[0])
   return t
 
+# body of the Montgomery mul: z[N] = x[N] y[N] R^(-1) mod p. pk has N+1
+# registers; t, t2 are temporaries. Uses rax, rdx. As in mcl's fp_mulL,
+# inputs may be < 2p (not only < p) provided p < R/4.
+def mul_body(pz, px, py, pk, t, t2, mont):
+  N = mont.pn
+  lea(rax, ptr(rip+'p'))
+  for i in range(N):
+    mov(rdx, ptr(py + i * 8))
+    montgomery1(mont, pk, px, rax, t, t2, i == 0)
+    if i < N - 1:
+      pk = rotatePack(pk)
+  keep = [pk[0], px, py, rdx, t, t2]
+  pk = pk[1:]
+  keep = keep[0:N]
+  assert len(keep) == N
+  mov_pp(keep, pk)
+  sub_pm(pk, rax) # z - p
+  cmovc_pp(pk, keep)
+  store_mp(pz, pk)
+
 # Montgomery mul(x, y)
 def gen_mul(name, mont):
   N = mont.pn
@@ -256,28 +276,7 @@ def gen_mul(name, mont):
   with FuncProc(name):
     assert not mont.isFullBit
     with StackFrame(3, N+3, useRDX=True) as sf:
-      pz = sf.p[0]
-      px = sf.p[1]
-      py = sf.p[2]
-      pk = sf.t[0:N+1]
-      t = sf.t[N+1]
-      t2 = sf.t[N+2]
-
-      lea(rax, ptr(rip+'p'))
-      for i in range(N):
-        mov(rdx, ptr(py + i * 8))
-        montgomery1(mont, pk, px, rax, t, t2, i == 0)
-        if i < N - 1:
-          pk = rotatePack(pk)
-      keep = [pk[0], px, py, rdx]
-      pk = pk[1:]
-      keep.extend(sf.t[N+1:])
-      keep = keep[0:N]
-      assert len(keep) == N
-      mov_pp(keep, pk)
-      sub_pm(pk, rax) # z - p
-      cmovc_pp(pk, keep)
-      store_mp(pz, pk)
+      mul_body(sf.p[0], sf.p[1], sf.p[2], sf.t[0:N+1], sf.t[N+1], sf.t[N+2], mont)
 
 # One row of schoolbook multiplication with mulx and w/o adx (rdx = y[i]):
 #   A: row = x * y[i]; one add/adc chain combines row[j] = lo[j] + hi[j-1].
@@ -825,6 +824,19 @@ def gen_modL(label, mont):
   mod_body(p[0], p[1], t[0:N+1], t[N+1], t[N+2], t[N+3], mont)
   ret()
 
+# local subroutine version of mul (Montgomery mul).
+# Contract: (z, x, y) in StackFrame(3, *, useRDX=True).p (rdi, rsi, r11 on
+# SysV); clobbers rax, rdx and the temp registers, so the caller's frame
+# must have saved the callee-saved ones among them.
+def gen_mulL(label, mont):
+  N = mont.pn
+  assert not mont.isFullBit
+  (p, t) = getFrameRegs(3, N+3)
+  align(16)
+  L(label)
+  mul_body(p[0], p[1], p[2], t[0:N+1], t[N+1], t[N+2], mont)
+  ret()
+
 # Fp2 mul: (z.a, z.b) = (a c - b d, a d + b c) where x = (a, b), y = (c, d),
 # each component N limbs in Montgomery form, b at byte offset*8 from a.
 # Port of mcl's gen_fp2_mul + fp2Dbl_mulPreL (fp_generator.hpp): Karatsuba
@@ -916,6 +928,73 @@ def gen_fp2_mul(name, mont, offset, mulPreL, modL):
       lea(px, ptr(rsp + S_d1))
       call(modL)
 
+# Fp2 sqr: (z.a, z.b) = (a^2 - b^2, 2 a b) where x = (a, b), b at byte
+# offset*8 from a. Port of mcl's gen_fp2_sqr (fp_generator.hpp): two calls of
+# the fused Montgomery mul via the local subroutine mulL, no sqrPre (both
+# products are cross products, so squaring symmetry cannot be exploited):
+#   t1 = 2b, t1 = mul(t1, a) = 2 a b R^(-1)
+#   t2 = a + b, t3 = a + p - b (adding p unconditionally avoids a borrow
+#     check; p (a + b) vanishes mod p)
+#   z.a = mul(t2, t3) = (a^2 - b^2) R^(-1), z.b = t1
+# The mul operands are < 2p, so the products are < 4p^2 < p R, which
+# requires p < R/4 (the caller checks this nocarry condition).
+def gen_fp2_sqr(name, mont, offset, mulL):
+  N = mont.pn
+  assert offset >= N
+  FpByte = offset * 8
+  align(16)
+  with FuncProc(name):
+    assert not mont.isFullBit
+    # stack: saved z, x + t1[N] + t2[N] + t3[N]
+    S_z = 0
+    S_x = 8
+    S_t1 = 16
+    S_t2 = S_t1 + N * 8
+    S_t3 = S_t2 + N * 8
+    with StackFrame(3, 10, useRDX=True, stackSizeByte=S_t3 + N * 8) as sf:
+      # sf.p matches the p of mulL (positional prefix, see getFrameRegs)
+      pz = sf.p[0]
+      px = sf.p[1]
+      py = sf.p[2]
+      mov(ptr(rsp + S_z), pz)
+      mov(ptr(rsp + S_x), px)
+      # t1 = b + b (< 2p, no carry out)
+      t = sf.t[0:N]
+      load_pm(t, px + FpByte)
+      for i in range(N):
+        add_ex(t[i], t[i], i == 0)
+      store_mp(rsp + S_t1, t)
+      # t1 = (2b) a R^(-1)
+      lea(pz, ptr(rsp + S_t1))
+      lea(px, ptr(rsp + S_t1))
+      mov(py, ptr(rsp + S_x))
+      call(mulL)
+      mov(px, ptr(rsp + S_x))
+      # t2 = a + b
+      for i in range(N):
+        mov(rax, ptr(px + i * 8))
+        add_ex(rax, ptr(px + FpByte + i * 8), i == 0)
+        mov(ptr(rsp + S_t2 + i * 8), rax)
+      # t3 = a + p - b
+      t = sf.t[0:N]
+      load_pm(t, px)
+      lea(rax, ptr(rip + 'p'))
+      for i in range(N):
+        add_ex(t[i], ptr(rax + i * 8), i == 0)
+      for i in range(N):
+        sub_ex(t[i], ptr(px + FpByte + i * 8), i == 0)
+      store_mp(rsp + S_t3, t)
+      # z.a = (a + b)(a + p - b) R^(-1)
+      mov(pz, ptr(rsp + S_z))
+      lea(px, ptr(rsp + S_t2))
+      lea(py, ptr(rsp + S_t3))
+      call(mulL)
+      # z.b = t1 (write after the last read of x: sqr(x, x) must work)
+      mov(pz, ptr(rsp + S_z))
+      t = sf.t[0:N]
+      load_pm(t, rsp + S_t1)
+      store_mp(pz + FpByte, t)
+
 def main():
   parser = getDefaultParser('gen bint')
   parser.add_argument('-p', type=str, default='', help='characteristic of a finite field')
@@ -932,6 +1011,7 @@ def main():
   parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
   parser.add_argument('-sqrPre', action='store_true', default=False, help='add sqrPre function (z[2N] = x^2, no reduction, N=4, 6 only)')
   parser.add_argument('-fp2_mul', action='store_true', default=False, help='add Fp2 mul function (Karatsuba + Montgomery reduction)')
+  parser.add_argument('-fp2_sqr', action='store_true', default=False, help='add Fp2 sqr function (2 fused Montgomery mul)')
   opt = parser.parse_args()
 
   init(opt)
@@ -982,6 +1062,12 @@ def main():
     gen_mulPreL(mulPreL, mont)
     gen_modL(modL, mont)
     gen_fp2_mul(f'{pre2}mul', mont, opt.offset, mulPreL, modL)
+  # p < R/4 so that the fused mul accepts operands < 2p
+  nocarry = (mont.p >> (opt.u * mont.pn - 2)) == 0
+  if opt.fp2_sqr and not mont.isFullBit and nocarry:
+    mulL = Label()
+    gen_mulL(mulL, mont)
+    gen_fp2_sqr(f'{pre2}sqr', mont, opt.offset, mulL)
 
   term()
 

@@ -232,7 +232,7 @@ def gen_mul(name, mont, dataVar, mulUnit):
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
-  with Function(name, Void, pz, px, py):
+  with Function(name, Void, pz, px, py) as f:
     pp = bitcast(dataVar, unit)
     ipval = mont.ip
     if mont.isFullBit:
@@ -282,6 +282,7 @@ def gen_mul(name, mont, dataVar, mulUnit):
       z = select(c, t, vc)
       storeN(z, pz)
     ret(Void)
+  return f
 
 # Montgomery reduction core: reduce a 2N-unit value to z = xy R^-1 mod p and
 # return it (bit wide). The low N units come packed in lo; the high units are
@@ -498,6 +499,38 @@ def gen_fp2_mul(name, mont, mulPreF, modF, subTbl, offset):
     call(modF, getelementptr(pz, offset), pd1)
     ret(Void)
 
+# Fp2 sqr: (z.a, z.b) = (a^2 - b^2, 2 a b) where x = (a, b), b at offset
+# limbs from a. Same structure as mcl's gen_fp2_sqr (fp_generator.hpp): two
+# calls of the fused Montgomery mul on alloca buffers, no sqrPre (both
+# products are cross products, so squaring symmetry cannot be exploited):
+#   t1 = 2b, z.b = mul(t1, a) = 2 a b R^(-1)
+#   t2 = a + b, t3 = a + p - b (adding p unconditionally avoids a borrow
+#     check; p (a + b) vanishes mod p)
+#   z.a = mul(t2, t3) = (a^2 - b^2) R^(-1)
+# The mul operands are < 2p, so the products are < 4p^2 < p R, which
+# requires p < R/4 (the caller checks this nocarry condition). sqr(x, x)
+# works in place: when the first mul writes z.b it only reads x.a, which
+# does not overlap x.b, and the second mul reads only the t2/t3 copies.
+def gen_fp2_sqr(name, mont, mulF, dataVar, offset):
+  N = mont.pn
+  resetGlobalIdx()
+  pz = IntPtr(unit)
+  px = IntPtr(unit)
+  with Function(name, Void, pz, px):
+    pp = bitcast(dataVar, unit)
+    pt1 = alloca_(unit, N)
+    pt2 = alloca_(unit, N)
+    pt3 = alloca_(unit, N)
+    a = loadN(px, N)
+    b = loadN(px, N, offset=offset)
+    p = loadN(pp, N)
+    storeN(add(b, b), pt1)
+    storeN(add(a, b), pt2)
+    storeN(sub(add(a, p), b), pt3)
+    call(mulF, getelementptr(pz, offset), pt1, px)
+    call(mulF, pz, pt2, pt3)
+    ret(Void)
+
 def gen_get_prime(name, pStr):
   resetGlobalIdx()
   r = IntPtr(8, const=True)
@@ -522,6 +555,7 @@ def main():
   parser.add_argument('-mulPre', action='store_true', default=False, help='add mulPre function (z[2N] = x*y, no reduction)')
   parser.add_argument('-sqrPre', action='store_true', default=False, help='add sqrPre function (z[2N] = x^2, no reduction)')
   parser.add_argument('-fp2_mul', action='store_true', default=False, help='add Fp2 mul function (Karatsuba + Montgomery reduction)')
+  parser.add_argument('-fp2_sqr', action='store_true', default=False, help='add Fp2 sqr function (2 fused Montgomery mul)')
 
   opt = parser.parse_args()
   if opt.n == 0:
@@ -535,6 +569,8 @@ def main():
   if opt.fp2_mul:
     opt.mulPre = True
     opt.mod = True
+  if opt.fp2_sqr:
+    opt.mul = True
 
   global mont, unit, unit2
   mont = Montgomery(opt.p, opt.u)
@@ -549,6 +585,7 @@ def main():
     opt.mulPre = True
     opt.sqrPre = True
     opt.fp2_mul = True
+    opt.fp2_sqr = True
     showPrototype()
 
   dataVar = makeVar('p', mont.bit, mont.p, const=False, static=False)
@@ -572,8 +609,9 @@ def main():
   mulPos = gen_mulPos(mulUU)
   mulUnit = gen_mulUnit(f'{opt.pre}mulUnit', mont.pn, mulPos, extractHigh)
 
+  mulF = None
   if opt.mul:
-    gen_mul(f'{opt.pre}mul', mont, dataVar, mulUnit)
+    mulF = gen_mul(f'{opt.pre}mul', mont, dataVar, mulUnit)
   if opt.sqr:
     gen_sqr(f'{opt.pre}sqr', mont, dataVar, mulUnit)
   modF = None
@@ -586,6 +624,10 @@ def main():
     gen_sqrPre(f'{opt.pre}sqrPre', mont.pn, mulPreF)
   if opt.fp2_mul and not mont.isFullBit:
     gen_fp2_mul(f'{opt.pre2}mul', mont, mulPreF, modF, subTbl, opt.offset)
+  # p < R/4 so that the fused mul accepts operands < 2p
+  nocarry = (mont.p >> (unit * mont.pn - 2)) == 0
+  if opt.fp2_sqr and not mont.isFullBit and nocarry:
+    gen_fp2_sqr(f'{opt.pre2}sqr', mont, mulF, dataVar, opt.offset)
 
   term()
 
