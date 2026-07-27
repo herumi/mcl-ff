@@ -366,18 +366,23 @@ def gen_mulPre(name, N, mulUnit):
 
 # If True then sqrPre(z, x) is a call to mulPre(z, x, x), as in mcl's
 # gen_mcl_fpDbl_sqrPre, instead of the dedicated schedule below.
-# Counter-intuitively this is the fastest of the three variants we tried: when
-# the mulPre body is inlined (or written as a plain mul(x, x) on 2N limbs) LLVM
-# spots that x[i]*x[j] == x[j]*x[i] and drops 36 mulx down to 21, but the carry
-# chain it then builds is long enough to lose the win. Clang keeps the call as
-# a tail jump, so nothing is paid for it.
-USE_MULPRE_FOR_SQRPRE = True
+# This used to be the fastest variant: the old row-major triangle accumulation
+# rippled every add's carry up to the top of one wide accumulator and lost to
+# the plain 36-mulx schoolbook. The bottom-up anti-diagonal schedule below
+# matches the handwritten x64 sqrPre6, so the call variant is now obsolete.
+USE_MULPRE_FOR_SQRPRE = not True
 
 # sqrPre: pz[2N] = px[N]^2 (no reduction).
-# Port of fp_generator.hpp sqrPre4/sqrPre6: accumulate the strictly-upper-
-# triangle cross products sum_{i<j} x[i]*x[j] << unit*(i+j), double them (each
-# off-diagonal term appears twice by symmetry), then add the diagonal squares
-# x[i]^2 << unit*2*i. LLVM lowers the wide shl/add chain to a mulx/adc sequence.
+# Same schedule as the handwritten x64 sqrPre6 of fp_generator.hpp: the cross
+# products on the anti-diagonal d = j - i, x[i]*x[i+d], sit at limbs
+# d, d+2, ... and tile without overlap, so a row is a plain concat (pack).
+# Rows are accumulated bottom-up (d = N-1 .. 1); each row extends the
+# accumulator by one limb at both ends, so a row add is one short carry chain
+# absorbed in the row's own top limb. Keeping the accumulator at its minimal
+# width (grow by 2 limbs per row, no early zext to 2N limbs) matters: with
+# full-width adds clang keeps 2N-limb values live and spills heavily.
+# Finally double the accumulator (each cross term appears twice by symmetry)
+# and add the diagonal squares x[i]^2, which tile the full 2N limbs exactly.
 def gen_sqrPre(name, N, mulPreF):
   bit = unit * N
   bit2 = bit * 2
@@ -390,17 +395,24 @@ def gen_sqrPre(name, N, mulPreF):
       ret(Void)
       return
     x = [load(getelementptr(px, i)) for i in range(N)]
-    cross = None
-    for i in range(N):
-      for j in range(i + 1, N):
-        xij = mul(zext(x[i], unit2), zext(x[j], unit2))
-        xij = shl(zext(xij, bit2), unit * (i + j))
-        cross = xij if cross is None else add(cross, xij)
-    z = shl(cross, 1)
-    for i in range(N):
-      xii = mul(zext(x[i], unit2), zext(x[i], unit2))
-      xii = shl(zext(xii, bit2), unit * 2 * i)
-      z = add(z, xii)
+    if N == 1:
+      storeN(mul(zext(x[0], unit2), zext(x[0], unit2)), pz)
+      ret(Void)
+      return
+    acc = None
+    for d in range(N - 1, 0, -1):
+      row = pack([mul(zext(x[i], unit2), zext(x[i + d], unit2)) for i in range(N - d)])
+      if acc is None:
+        acc = row
+      else:
+        acc = add(shl(zext(acc, row.bit), unit), row)
+    acc = zext(acc, acc.bit + unit)
+    acc = add(acc, acc)
+    z = shl(zext(acc, bit2), unit)
+    # emit the diagonal mulx last, close to their only use: hoisting them to
+    # the top lengthens their live ranges and costs ~1 cycle in practice
+    diag = pack([mul(zext(x[i], unit2), zext(x[i], unit2)) for i in range(N)])
+    z = add(z, diag)
     storeN(z, pz)
     ret(Void)
 
