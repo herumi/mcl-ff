@@ -427,16 +427,31 @@ def gen_sqrPre(name, N, mulPreF):
     storeN(sqrPre_raw(x, N), pz)
     ret(Void)
 
-# Fused sqr: z = x^2 R^-1 mod p. The 2N-unit product of sqrPre_raw stays in
-# one SSA value and is reduced in place by mod_raw, so the intermediate never
-# goes through memory and the call overhead of a sqrPre + mod pair is gone.
-def gen_sqr(name, mont, dataVar, mulUnit):
+# If True then sqr(z, x) is a call to mul(z, x, x) instead of the fused
+# sqrPre + Montgomery reduction below. The fused variant needs fewer muls
+# (N(N+1)/2 + N^2 + N = 63 vs 2N^2 + N = 78 for N=6) but loses to mul(x, x)
+# on both Xeon w9-3495X (26.8/21.9 vs 23.7/19.9 ns latency/throughput,
+# BLS12-381-p) and Apple M4 (21.5/14.8 vs 18.7/14.1): sqrPre_raw keeps the
+# whole 2N-limb product live when the serial reduction starts, which the
+# register file cannot hold, and the saved muls are eaten by spills.
+# See memo.md 2026-07-27.
+USE_MUL_FOR_SQR = True
+
+# sqr: z = x^2 R^-1 mod p. A call to mul (see USE_MUL_FOR_SQR above), or the
+# fused variant: the 2N-unit product of sqrPre_raw stays in one SSA value and
+# is reduced in place by mod_raw, so the intermediate never goes through
+# memory and the call overhead of a sqrPre + mod pair is gone.
+def gen_sqr(name, mont, dataVar, mulUnit, mulF):
   N = mont.pn
   bit = unit * N
   resetGlobalIdx()
   pz = IntPtr(unit)
   px = IntPtr(unit)
   with Function(name, Void, pz, px):
+    if USE_MUL_FOR_SQR:
+      call(mulF, pz, px, px)
+      ret(Void)
+      return
     pp = bitcast(dataVar, unit)
     x = [load(getelementptr(px, i)) for i in range(N)]
     xy = sqrPre_raw(x, N)
@@ -550,7 +565,7 @@ def main():
   parser.add_argument('-add', action='store_true', default=False, help='add add function')
   parser.add_argument('-sub', action='store_true', default=False, help='add sub function')
   parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
-  parser.add_argument('-sqr', action='store_true', default=False, help='add sqr function (fused sqrPre + Montgomery reduction)')
+  parser.add_argument('-sqr', action='store_true', default=False, help='add sqr function (a call to mul(z, x, x))')
   parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
   parser.add_argument('-mulPre', action='store_true', default=False, help='add mulPre function (z[2N] = x*y, no reduction)')
   parser.add_argument('-sqrPre', action='store_true', default=False, help='add sqrPre function (z[2N] = x^2, no reduction)')
@@ -570,6 +585,8 @@ def main():
     opt.mulPre = True
     opt.mod = True
   if opt.fp2_sqr:
+    opt.mul = True
+  if opt.sqr and USE_MUL_FOR_SQR:
     opt.mul = True
 
   global mont, unit, unit2
@@ -613,7 +630,7 @@ def main():
   if opt.mul:
     mulF = gen_mul(f'{opt.pre}mul', mont, dataVar, mulUnit)
   if opt.sqr:
-    gen_sqr(f'{opt.pre}sqr', mont, dataVar, mulUnit)
+    gen_sqr(f'{opt.pre}sqr', mont, dataVar, mulUnit, mulF)
   modF = None
   if opt.mod:
     modF = gen_mod(f'{opt.pre}mod', mont, dataVar, mulUnit)

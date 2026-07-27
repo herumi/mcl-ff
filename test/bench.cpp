@@ -87,7 +87,7 @@ extern "C" {
 	void llvm_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm2_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_mul(uint64_t*, const uint64_t*, const uint64_t*);
-	// z = x^2 R^-1 mod p (fused sqrPre + Montgomery reduction)
+	// z = x^2 R^-1 mod p (a call to llvm_mul(z, x, x); see USE_MUL_FOR_SQR)
 	void llvm_sqr(uint64_t*, const uint64_t*);
 	// Fp2 mul (Karatsuba: 3 mulPre + 2 Montgomery reductions)
 	void llvm2_mul(uint64_t*, const uint64_t*, const uint64_t*);

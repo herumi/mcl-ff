@@ -60,6 +60,13 @@ MCL_FF_OBJ+=obj/$(NAME)_x64.o
 BENCH_X64_OBJ=obj/bench_x64.o
 endif
 
+# On Mach-O an undefined weak symbol is a link error (unlike ELF, where it
+# resolves to NULL); -U lets llvm2_sqr stay undefined so that types failing
+# the nocarry condition (e.g. BLS12-381-r) still link (bench.cpp skips it).
+ifeq ($(shell uname -s),Darwin)
+BENCH_LDFLAGS=-Wl,-U,_llvm2_sqr
+endif
+
 ifeq ($(DEBUG),1)
 else
   CFLAGS+=-O2 -DNDEBUG
@@ -102,7 +109,7 @@ $(BENCH_X64_OBJ): src/bench_x64.S
 	$(CXX) -c -o $@ $< -fPIC
 endif
 $(BENCH_EXE): test/bench.cpp obj/bench_llvm.o $(BENCH_X64_OBJ) $(HEADER)
-	$(CXX) -o $@ $< obj/bench_llvm.o $(BENCH_X64_OBJ) $(CFLAGS) $(MCL_LIB)
+	$(CXX) -o $@ $< obj/bench_llvm.o $(BENCH_X64_OBJ) $(CFLAGS) $(MCL_LIB) $(BENCH_LDFLAGS)
 bench: $(BENCH_EXE)
 	$(BENCH_EXE)
 
