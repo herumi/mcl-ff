@@ -357,7 +357,7 @@ int main(int argc, char *argv[]) {
 	if (ss.empty() || ss.find("add") != ss.end()) {
 		check_and_bench(mode, "add", C, Fp::add, {llvm_add, x64_add});
 	}
-	if (ss.empty() || ss.find("add") != ss.end()) {
+	if (ss.empty() || ss.find("sub") != ss.end()) {
 		check_and_bench(mode, "sub", C, Fp::sub, {llvm_sub, x64_sub});
 	}
 	if (ss.empty() || ss.find("add2") != ss.end()) {
