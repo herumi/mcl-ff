@@ -45,7 +45,7 @@ LDFLAGS=$(MCL_FF_OBJ) $(MCL_LIB)
 
 ifeq ($(ARCH),x86_64)
 GEN_OPT=-add -sub
-CFLAGS+=-mbmi2 -DMCL_X64_ASM
+CFLAGS+=-mbmi2
 BENCH_X64_OBJ=obj/bench_x64.o
 else
 # and-mask sub reduction: faster than the {0,p} table on aarch64
