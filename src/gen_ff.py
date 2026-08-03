@@ -430,6 +430,57 @@ def gen_mod128(name, mont, dataVar, mulUnit):
     ret(Void)
   return f
 
+# Radix-2^128 variant of the fused Montgomery mul (see mod128_raw for the
+# idea): q is computed two units at a time via ip2 = -p^-1 mod 2^128, so the
+# serial recurrence t0 -> q -> p[0]*q -> new t0 has half as many stages.
+# The row accumulation is kept in exactly the shape of gen_mul (one unit at a
+# time); only the q supply changes. The pair's q needs t mod 2^128 after the
+# x*y[2i] row plus the contribution of the x*y[2i+1] row to the second unit,
+# which is just lo(x[0]*y[2i+1]): only that single unit is computed early, so
+# the full xy1 row is not kept live across the first reduction row (computing
+# it early doubles the live ranges and costs ~2x stack traffic on x64).
+# Requires N even and p not full bit.
+def gen_mul128(name, mont, dataVar, mulUnit):
+  N = mont.pn
+  assert N % 2 == 0 and not mont.isFullBit
+  bit = unit * N
+  u2 = unit * 2
+  ip2 = (-pow(mont.p, -1, 1 << u2)) % (1 << u2)
+  resetGlobalIdx()
+  pz = IntPtr(unit)
+  px = IntPtr(unit)
+  py = IntPtr(unit)
+  with Function(name, Void, pz, px, py) as f:
+    pp = bitcast(dataVar, unit)
+    x0 = load(px)
+    for i in range(N // 2):
+      y0 = load(getelementptr(py, 2 * i))
+      xy0 = call(mulUnit, px, y0)
+      if i == 0:
+        t = xy0
+      else:
+        t = add(t, xy0)
+      y1 = load(getelementptr(py, 2 * i + 1))
+      m1 = mul(x0, y1) # low unit of the x*y[2i+1] row
+      lo2 = add(trunc(t, u2), shl(zext(m1, u2), unit))
+      q = mul(lo2, ip2)
+      qs = [trunc(q, unit), trunc(lshr(q, unit), unit)]
+      pq = call(mulUnit, pp, qs[0])
+      t = add(t, pq)
+      t = lshr(t, unit)
+      xy1 = call(mulUnit, px, y1)
+      t = add(t, xy1)
+      pq = call(mulUnit, pp, qs[1])
+      t = add(t, pq)
+      t = lshr(t, unit)
+    t = trunc(t, bit)
+    vc = sub(t, loadN(pp, N))
+    c = trunc(lshr(vc, bit - 1), 1)
+    z = select(c, t, vc)
+    storeN(z, pz)
+    ret(Void)
+  return f
+
 # pz[2N] = px[N] * py[N] (no reduction). Port of gen.py:generic_fpDbl_mul of
 # mcl: schoolbook rows x * y[i] accumulated in the bit+unit accumulator t, whose
 # bottom unit is final after each row and is stored immediately.
@@ -655,6 +706,7 @@ def main():
   parser.add_argument('-sub_mask', action='store_true', default=False, help='use an and-mask for the conditional +p in sub instead of the {0,p} table (faster on aarch64)')
   parser.add_argument('-mul', action='store_true', default=False, help='add mul function')
   parser.add_argument('-sqr', action='store_true', default=False, help='add sqr function (a call to mul(z, x, x))')
+  parser.add_argument('-mul128', action='store_true', default=False, help='add mul128 (fused Montgomery mul with radix-2^128 q lookahead) function')
   parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
   parser.add_argument('-mod128', action='store_true', default=False, help='add mod128 (radix-2^128 Montgomery reduction) function')
   parser.add_argument('-mulPre', action='store_true', default=False, help='add mulPre function (z[2N] = x*y, no reduction)')
@@ -721,6 +773,8 @@ def main():
     mulF = gen_mul(f'{opt.pre}mul', mont, dataVar, mulUnit)
   if opt.sqr:
     gen_sqr(f'{opt.pre}sqr', mont, dataVar, mulUnit, mulF)
+  if opt.mul128 and mont.pn % 2 == 0 and not mont.isFullBit:
+    gen_mul128(f'{opt.pre}mul128', mont, dataVar, mulUnit)
   modF = None
   if opt.mod:
     modF = gen_mod(f'{opt.pre}mod', mont, dataVar, mulUnit)

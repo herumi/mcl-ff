@@ -87,6 +87,10 @@ extern "C" {
 	void llvm_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm2_sub(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_mul(uint64_t*, const uint64_t*, const uint64_t*);
+	// radix-2^128 variant of llvm_mul (q computed two limbs at a time from
+	// -p^-1 mod 2^128); weak because it is generated only for even N and
+	// non-full-bit p (e.g. not for secp256k1-p)
+	__attribute__((weak)) void llvm_mul128(uint64_t*, const uint64_t*, const uint64_t*);
 	// z = x^2 R^-1 mod p (a call to llvm_mul(z, x, x); see USE_MUL_FOR_SQR)
 	void llvm_sqr(uint64_t*, const uint64_t*);
 	// Fp2 mul (Karatsuba: 3 mulPre + 2 Montgomery reductions)
@@ -348,8 +352,8 @@ int main(int argc, char *argv[]) {
 #else
 		printf("unit: ns/op (smaller is faster); base = mcl, (Nx) = time / base\n");
 #endif
-		printf("%-7s %-11s %15s %15s %15s %15s\n",
-			"op", "mode", "base", "llvm", "x64", "x64woadx");
+		printf("%-7s %-11s %15s %15s %15s %15s %15s\n",
+			"op", "mode", "base", "llvm", "x64", "x64woadx", "llvm128");
 	}
 #ifdef NDEBUG
 	const size_t C = 200000000;
@@ -371,7 +375,8 @@ int main(int argc, char *argv[]) {
 		check_and_bench(mode, "sub2", C, Fp2::sub, {llvm2_sub, x642_sub});
 	}
 	if (ss.empty() || ss.find("mul") != ss.end()) {
-		check_and_bench(mode, "mul", C2, Fp::mul, {llvm_mul, x64_mul, x64_mul_wo_adx});
+		// llvm_mul128 lands in the 5th (llvm128) column
+		check_and_bench(mode, "mul", C2, Fp::mul, {llvm_mul, x64_mul, x64_mul_wo_adx, llvm_mul128});
 	}
 	if (ss.empty() || ss.find("sqr") != ss.end()) {
 		check_and_bench(mode, "sqr", C2, Fp::sqr, std::initializer_list<FpOp1>{llvm_sqr, x64_sqr});
