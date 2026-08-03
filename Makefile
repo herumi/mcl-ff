@@ -65,8 +65,9 @@ endif
 # On Mach-O an undefined weak symbol is a link error (unlike ELF, where it
 # resolves to NULL); -U lets llvm2_sqr stay undefined so that types failing
 # the nocarry condition (e.g. BLS12-381-r) still link (bench.cpp skips it).
+# Likewise llvm_mod128 (generated only for even N and non-full-bit p).
 ifeq ($(shell uname -s),Darwin)
-BENCH_LDFLAGS=-Wl,-U,_llvm2_sqr
+BENCH_LDFLAGS=-Wl,-U,_llvm2_sqr -Wl,-U,_llvm_mod128
 endif
 
 ifeq ($(DEBUG),1)
@@ -101,7 +102,7 @@ test: $(BENCH_EXE)
 # (x64 asm) under distinct prefixes and compare them within a single executable
 # (test/bench.cpp).
 src/bench_llvm.ll: src/gen_ff.py $(GEN_STAMP)
-	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul -sqr -mod -mulPre -sqrPre -fp2_mul -fp2_sqr $(SUB_OPT) > $@
+	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul -sqr -mod -mod128 -mulPre -sqrPre -fp2_mul -fp2_sqr $(SUB_OPT) > $@
 obj/bench_llvm.o: src/bench_llvm.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
 ifeq ($(ARCH),x86_64)

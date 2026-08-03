@@ -98,6 +98,10 @@ extern "C" {
 	void llvm_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
 	// z[N] = xy[2N] R^-1 mod p (Montgomery reduction)
 	void llvm_mod(uint64_t*, const uint64_t*);
+	// radix-2^128 variant of llvm_mod (q computed two limbs at a time from
+	// -p^-1 mod 2^128); weak because it is generated only for even N and
+	// non-full-bit p (e.g. not for secp256k1-p)
+	__attribute__((weak)) void llvm_mod128(uint64_t*, const uint64_t*);
 	// z[2N] = x[N]^2 (no reduction)
 	void llvm_sqrPre(uint64_t*, const uint64_t*);
 #ifdef MCL_X64_ASM
@@ -382,7 +386,8 @@ int main(int argc, char *argv[]) {
 		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, std::initializer_list<FpOp>{llvm_mulPre, x64_mulPre, x64_mulPre_wo_adx});
 	}
 	if (ss.empty() || ss.find("mod") != ss.end()) {
-		check_and_bench(mode, "mod", C2, FpDbl::mod, std::initializer_list<FpOp1>{llvm_mod, x64_mod});
+		// llvm_mod128 lands in the 4th (x64woadx) column
+		check_and_bench(mode, "mod", C2, FpDbl::mod, std::initializer_list<FpOp1>{llvm_mod, x64_mod, llvm_mod128});
 	}
 	if (ss.empty() || ss.find("sqrPre") != ss.end()) {
 		check_and_bench(mode, "sqrPre", C2, FpDbl::sqrPre, std::initializer_list<FpOp1>{llvm_sqrPre, x64_sqrPre});
