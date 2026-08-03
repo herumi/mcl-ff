@@ -475,6 +475,59 @@ def gen_mod(name, mont):
     with StackFrame(2, N+4, useRDX=True) as sf:
       mod_body(sf.p[0], sf.p[1], sf.t[0:N+1], sf.t[N+1], sf.t[N+2], sf.t[N+3], mont)
 
+# Radix-2^128 variant of mod_body (see gen_ff.py:mod128_raw for the idea):
+# q is computed two limbs at a time from ip2 = -p^-1 mod 2^128, halving the
+# serial recurrence t0 -> q = t0*ip -> hi(p[0]*q) -> new t0. The accumulation
+# keeps exactly the mulAdd2 shape of mod_body; only the q supply changes.
+# With ip2 = ip2hi:ip (the low limb of ip2 equals ip),
+#   q0 = t0*ip mod 2^64
+#   q1 = (hi(t0*ip) + t0*ip2hi + t1*ip) mod 2^64
+# and t + p*(q1:q0) = 0 mod 2^128, so after the first row the new low limb
+# also satisfies c[0] + lo(p[0]*q1) = 0 mod 2^64 and mulAdd2 works unchanged
+# for the second row. Requires N even and p not full bit.
+def mod128_body(pz, pxy, pk, CF, tt, Q1, pp, mont):
+  N = mont.pn
+  ip2hi = ((-pow(mont.p, -1, 1 << 128)) % (1 << 128)) >> 64
+  lea(pp, ptr(rip+'p'))
+  xor_(CF, CF)
+  load_pm(pk[0:N], pxy)
+  for i in range(N//2):
+    last = 2*i+1 == N-1
+    # Q1:rdx = q1:q0 = (pk[1]:pk[0]) * ip2 mod 2^128
+    mov(rax, ip2hi)
+    imul(rax, pk[0])
+    mov(Q1, rax)
+    mov(rax, mont.ip)
+    imul(rax, pk[1])
+    add(Q1, rax)
+    mov(rdx, pk[0])
+    mulx(rax, rdx, ptr(rip+'ip')) # rdx = q0, rax = hi(t0*ip)
+    add(Q1, rax)
+    mulAdd2(pk, ptr(pxy + (N + 2*i) * 8), pp, tt, CF, i > 0)
+    pk = rotatePack(pk)
+    mov(rdx, Q1)
+    mulAdd2(pk, ptr(pxy + (N + 2*i+1) * 8), pp, tt, CF, True, not last)
+    if not last:
+      pk = rotatePack(pk)
+  pk0 = pk[0] # pk[0] = 0, reused as a temporary
+  zp = pk[1:]
+  keep = [pxy, rax, rdx, tt, CF, pk0][0:N]
+  assert len(keep) == N
+  mov_pp(keep, zp)
+  sub_pm(zp, pp) # z -= p
+  cmovc_pp(zp, keep)
+  store_mp(pz, zp)
+
+# Montgomery reduction, radix-2^128 variant (see mod128_body).
+def gen_mod128(name, mont):
+  N = mont.pn
+  assert N <= 6 and N % 2 == 0
+  align(16)
+  with FuncProc(name):
+    assert not mont.isFullBit
+    with StackFrame(2, N+5, useRDX=True) as sf:
+      mod128_body(sf.p[0], sf.p[1], sf.t[0:N+1], sf.t[N+1], sf.t[N+2], sf.t[N+3], sf.t[N+4], mont)
+
 # body of mulPre: z[2N] = x[N] * y[N] (schoolbook, no reduction) with
 # adcx/adox rows (mulAdd), i.e. gen_mul without the Montgomery step. After
 # row i, pk[0] is final (= z[i]) and is stored immediately; rotatePack shifts
@@ -1009,6 +1062,7 @@ def main():
   parser.add_argument('-mulPre', action='store_true', default=False, help='add mulPre function (z[2N] = x*y, no reduction)')
   parser.add_argument('-mulPre_wo_adx', action='store_true', default=False, help='add mulPre function without adcx/adox (N=4, 6 only)')
   parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
+  parser.add_argument('-mod128', action='store_true', default=False, help='add mod128 (radix-2^128 Montgomery reduction) function')
   parser.add_argument('-sqrPre', action='store_true', default=False, help='add sqrPre function (z[2N] = x^2, no reduction, N=4, 6 only)')
   parser.add_argument('-fp2_mul', action='store_true', default=False, help='add Fp2 mul function (Karatsuba + Montgomery reduction)')
   parser.add_argument('-fp2_sqr', action='store_true', default=False, help='add Fp2 sqr function (2 fused Montgomery mul)')
@@ -1054,6 +1108,8 @@ def main():
     gen_mulPre_wo_adx(f'{opt.pre}mulPre_wo_adx', mont)
   if opt.mod and not mont.isFullBit:
     gen_mod(f'{opt.pre}mod', mont)
+  if opt.mod128 and not mont.isFullBit and mont.pn % 2 == 0:
+    gen_mod128(f'{opt.pre}mod128', mont)
   if opt.sqrPre:
     gen_sqrPre(f'{opt.pre}sqrPre', mont)
   if opt.fp2_mul and not mont.isFullBit:

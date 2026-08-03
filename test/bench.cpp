@@ -128,6 +128,9 @@ extern "C" {
 	void x64_mulPre_wo_adx(uint64_t*, const uint64_t*, const uint64_t*);
 	// z[N] = xy[2N] R^-1 mod p (Montgomery reduction)
 	void x64_mod(uint64_t*, const uint64_t*);
+	// radix-2^128 variant of x64_mod (q computed two limbs at a time);
+	// weak because it is generated only for even N and non-full-bit p
+	__attribute__((weak)) void x64_mod128(uint64_t*, const uint64_t*);
 	// z[2N] = x[N]^2 (no reduction), hand-scheduled mulx + add/adc
 	void x64_sqrPre(uint64_t*, const uint64_t*);
 #else
@@ -145,6 +148,7 @@ extern "C" {
 	#define x64_mulPre ((FpOp)nullptr)
 	#define x64_mulPre_wo_adx ((FpOp)nullptr)
 	#define x64_mod ((FpOp1)nullptr)
+	#define x64_mod128 ((FpOp1)nullptr)
 	#define x64_sqrPre ((FpOp1)nullptr)
 #endif
 }
@@ -353,8 +357,8 @@ int main(int argc, char *argv[]) {
 #else
 		printf("unit: ns/op (smaller is faster); base = mcl, (Nx) = time / base\n");
 #endif
-		printf("%-7s %-11s %15s %15s %15s %15s %15s\n",
-			"op", "mode", "base", "llvm", "x64", "x64woadx", "llvm128");
+		printf("%-7s %-11s %15s %15s %15s %15s %15s %15s\n",
+			"op", "mode", "base", "llvm", "x64", "x64woadx", "llvm128", "x64_128");
 	}
 #ifdef NDEBUG
 	const size_t C = 200000000;
@@ -392,9 +396,9 @@ int main(int argc, char *argv[]) {
 		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, std::initializer_list<FpOp>{llvm_mulPre, x64_mulPre, x64_mulPre_wo_adx});
 	}
 	if (ss.empty() || ss.find("mod") != ss.end()) {
-		// nullptr keeps the x64woadx column empty so that llvm_mod128
-		// lands in the 5th (llvm128) column like llvm_mul128
-		check_and_bench(mode, "mod", C2, FpDbl::mod, std::initializer_list<FpOp1>{llvm_mod, x64_mod, nullptr, llvm_mod128});
+		// nullptr keeps the x64woadx column empty so that llvm_mod128 and
+		// x64_mod128 land in the llvm128/x64_128 columns
+		check_and_bench(mode, "mod", C2, FpDbl::mod, std::initializer_list<FpOp1>{llvm_mod, x64_mod, nullptr, llvm_mod128, x64_mod128});
 	}
 	if (ss.empty() || ss.find("sqrPre") != ss.end()) {
 		check_and_bench(mode, "sqrPre", C2, FpDbl::sqrPre, std::initializer_list<FpOp1>{llvm_sqrPre, x64_sqrPre});
