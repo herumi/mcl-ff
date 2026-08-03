@@ -236,7 +236,8 @@ void printRow(const char *name, const char *mode, const std::vector<double>& v) 
 	printf("%-7s %-11s", name, mode);
 	for (size_t i = 0; i < v.size(); i++) {
 		char buf[64];
-		if (i == 0) snprintf(buf, sizeof(buf), "%.3f", v[i]); // base
+		if (v[i] == 0) snprintf(buf, sizeof(buf), "-"); // absent impl
+		else if (i == 0) snprintf(buf, sizeof(buf), "%.3f", v[i]); // base
 		else snprintf(buf, sizeof(buf), "%.3f(%.2fx)", v[i], v[i] / v[0]);
 		printf(" %15s", buf);
 	}
@@ -391,8 +392,9 @@ int main(int argc, char *argv[]) {
 		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, std::initializer_list<FpOp>{llvm_mulPre, x64_mulPre, x64_mulPre_wo_adx});
 	}
 	if (ss.empty() || ss.find("mod") != ss.end()) {
-		// llvm_mod128 lands in the 4th (x64woadx) column
-		check_and_bench(mode, "mod", C2, FpDbl::mod, std::initializer_list<FpOp1>{llvm_mod, x64_mod, llvm_mod128});
+		// nullptr keeps the x64woadx column empty so that llvm_mod128
+		// lands in the 5th (llvm128) column like llvm_mul128
+		check_and_bench(mode, "mod", C2, FpDbl::mod, std::initializer_list<FpOp1>{llvm_mod, x64_mod, nullptr, llvm_mod128});
 	}
 	if (ss.empty() || ss.find("sqrPre") != ss.end()) {
 		check_and_bench(mode, "sqrPre", C2, FpDbl::sqrPre, std::initializer_list<FpOp1>{llvm_sqrPre, x64_sqrPre});
