@@ -240,7 +240,9 @@ def gen_mulUnit(name, N, mulPos, extractHigh):
   z = Int(bu)
   px = IntPtr(unit)
   y = Int(unit)
-  with Function(name, z, px, y, private=True) as f:
+  # alwaysinline: for N >= 8 clang stops inlining this into mulPre and the
+  # 2N call round-trips cost ~1.7x in throughput (see memo.md 2026-08-31)
+  with Function(name, z, px, y, private=True, alwaysinline=True) as f:
     L = []
     H = []
     for i in range(N):
