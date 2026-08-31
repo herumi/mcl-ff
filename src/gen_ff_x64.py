@@ -548,13 +548,19 @@ def mulPre_body(pz, px, py, pk, t, t2, N):
     mov(ptr(pz + (N + j) * 8), pk[j])
 
 # mulPre: z[2N] = x[N] * y[N]. Unlike gen_mul, no final subtraction is
-# needed, so N+3 temps suffice even for N=6 (no spill).
+# needed, so N+3 temps suffice even for N=6 (no spill). For N >= 7 the
+# frame runs out of GPRs, but mulPre_body never touches rax (no Montgomery
+# step), so rax serves as t2 and N+2 temps are enough (N=8 still no spill).
 def gen_mulPre(name, mont):
   N = mont.pn
   align(16)
   with FuncProc(name):
-    with StackFrame(3, N+3, useRDX=True) as sf:
-      mulPre_body(sf.p[0], sf.p[1], sf.p[2], sf.t[0:N+1], sf.t[N+1], sf.t[N+2], N)
+    if N <= 6:
+      with StackFrame(3, N+3, useRDX=True) as sf:
+        mulPre_body(sf.p[0], sf.p[1], sf.p[2], sf.t[0:N+1], sf.t[N+1], sf.t[N+2], N)
+    else:
+      with StackFrame(3, N+2, useRDX=True) as sf:
+        mulPre_body(sf.p[0], sf.p[1], sf.p[2], sf.t[0:N+1], sf.t[N+1], rax, N)
 
 # mulPre: z[2N] = x[N] * y[N] (schoolbook, no reduction), built from the same
 # mulx-only rows (mulRow_wo_adx) as gen_mul_wo_adx but without the Montgomery
