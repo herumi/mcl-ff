@@ -95,7 +95,7 @@ def L(label):
   output(f'{getDefLabel(label.n)}:')
 
 class Function:
-  def __init__(self, name, ret, *args, private=False, noalias=True):
+  def __init__(self, name, ret, *args, private=False, noalias=True, alwaysinline=False):
     self.name = name
     self.ret = ret
     self.args = args
@@ -120,6 +120,8 @@ class Function:
         s += ', '
       s += args[i].getFullName(noalias, isArg=True)
     s += ')'
+    if alwaysinline:
+      s += ' alwaysinline'
     output(s)
     output('{')
 
