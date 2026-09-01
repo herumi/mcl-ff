@@ -720,8 +720,14 @@ def main():
   if opt.n == 0:
     opt.n = 9 if opt.u == 64 else 17
     opt.addn = 16 if opt.u == 64 else 32
+  # the global holding p gets a per-characteristic name so that modules
+  # generated for different p can be linked into one executable
   if opt.p == '':
-    opt.p = primeTbl[opt.type]
+    opt.p = primeTbl[opt.type].p
+    opt.pName = f'mcl_{primeTbl[opt.type].c}_p'
+  else:
+    opt.p = int(opt.p, 0)
+    opt.pName = f'{opt.pre}p'
   opt.pre2 = opt.pre[:-1] + '2_'
   if opt.sqrPre and USE_MULPRE_FOR_SQRPRE:
     opt.mulPre = True
@@ -749,7 +755,7 @@ def main():
     opt.fp2_sqr = True
     showPrototype()
 
-  dataVar = makeVar('p', mont.bit, mont.p, const=False, static=False)
+  dataVar = makeVar(opt.pName, mont.bit, mont.p, const=False, static=False)
   makeVar('ip', unit, mont.ip, const=True, static=True)
   pStr = makeStrVar('pStr', hex(opt.p))
 

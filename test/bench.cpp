@@ -327,12 +327,124 @@ void check_and_bench(int mode, const char *name, size_t loop, F base, std::initi
 	if (mode & BENCH_MODE) benchmark(name, loop, base, fs);
 }
 
+// Size-swept mulPre variants for mulPreOnlyBench (bench.exe -mulPre):
+// z[2n] = x[n] * y[n] for n = 2..8, generated from n-limb dummy odd p
+// (mulPre depends only on the limb count, not on p) regardless of TYPE.
+// See the MULPRE_N rules in the Makefile.
+extern "C" {
+	void llvm_n2_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_n3_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_n4_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_n5_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_n6_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_n7_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_n8_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+#ifdef MCL_X64_ASM
+	void x64_n2_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+	void x64_n3_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+	void x64_n4_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+	void x64_n5_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+	void x64_n6_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+	void x64_n7_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+	void x64_n8_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
+#else
+	#define x64_n2_mulPre ((FpOp)nullptr)
+	#define x64_n3_mulPre ((FpOp)nullptr)
+	#define x64_n4_mulPre ((FpOp)nullptr)
+	#define x64_n5_mulPre ((FpOp)nullptr)
+	#define x64_n6_mulPre ((FpOp)nullptr)
+	#define x64_n7_mulPre ((FpOp)nullptr)
+	#define x64_n8_mulPre ((FpOp)nullptr)
+#endif
+}
+
+// z[2n] = x[n] * y[n] schoolbook reference with __int128
+static void refMulPre(uint64_t *z, const uint64_t *x, const uint64_t *y, int n)
+{
+	memset(z, 0, n * 2 * sizeof(uint64_t));
+	for (int i = 0; i < n; i++) {
+		unsigned __int128 c = 0;
+		for (int j = 0; j < n; j++) {
+			c += (unsigned __int128)x[i] * y[j] + z[i + j];
+			z[i + j] = (uint64_t)c;
+			c >>= 64;
+		}
+		z[i + n] = (uint64_t)c;
+	}
+}
+
+// throughput of llvm_mulPre vs x64_mulPre for each limb count n = 2..8
+void mulPreOnlyBench()
+{
+	const int maxN = 8;
+	const struct { int n; FpOp llvmF; FpOp x64F; } tbl[] = {
+		{ 2, llvm_n2_mulPre, x64_n2_mulPre },
+		{ 3, llvm_n3_mulPre, x64_n3_mulPre },
+		{ 4, llvm_n4_mulPre, x64_n4_mulPre },
+		{ 5, llvm_n5_mulPre, x64_n5_mulPre },
+		{ 6, llvm_n6_mulPre, x64_n6_mulPre },
+		{ 7, llvm_n7_mulPre, x64_n7_mulPre },
+		{ 8, llvm_n8_mulPre, x64_n8_mulPre },
+	};
+	cybozu::XorShift rg;
+	// correctness first: both against the __int128 reference
+	for (const auto& e : tbl) {
+		for (int i = 0; i < 1000; i++) {
+			uint64_t x[maxN], y[maxN], z[maxN*2], zr[maxN*2];
+			for (int j = 0; j < e.n; j++) {
+				x[j] = rg.get64();
+				y[j] = rg.get64();
+			}
+			refMulPre(zr, x, y, e.n);
+			e.llvmF(z, x, y);
+			if (memcmp(zr, z, e.n * 2 * sizeof(uint64_t)) != 0) {
+				fprintf(stderr, "ERR llvm mulPre n=%d i=%d\n", e.n, i);
+				exit(1);
+			}
+			if (e.x64F) {
+				e.x64F(z, x, y);
+				if (memcmp(zr, z, e.n * 2 * sizeof(uint64_t)) != 0) {
+					fprintf(stderr, "ERR x64 mulPre n=%d i=%d\n", e.n, i);
+					exit(1);
+				}
+			}
+		}
+	}
+#ifdef USE_CLK
+	printf("mulPre throughput (P=4 independent streams), unit: tsc/op\n");
+#else
+	printf("mulPre throughput (P=4 independent streams), unit: ns/op\n");
+#endif
+	printf("%2s %10s %10s %9s\n", "N", "llvm", "x64", "x64/llvm");
+	const size_t P = 4;
+	const size_t loop = 10000000;
+	static uint64_t a[P][maxN], y[maxN], dst[P][maxN*2];
+	for (size_t k = 0; k < P; k++) for (int j = 0; j < maxN; j++) a[k][j] = rg.get64();
+	for (int j = 0; j < maxN; j++) y[j] = rg.get64();
+	for (const auto& e : tbl) {
+		FpOp f = e.llvmF;
+		double tLlvm = measure([&](size_t k) { f(dst[k], a[k], y); }, P, loop);
+		double tX64 = 0;
+		if (e.x64F) {
+			f = e.x64F;
+			tX64 = measure([&](size_t k) { f(dst[k], a[k], y); }, P, loop);
+		}
+		if (tX64 > 0) {
+			printf("%2d %10.3f %10.3f %8.2fx\n", e.n, tLlvm, tX64, tX64 / tLlvm);
+		} else {
+			printf("%2d %10.3f %10s %9s\n", e.n, tLlvm, "-", "-");
+		}
+	}
+}
+
 int main(int argc, char *argv[]) {
 	int mode;
 	cybozu::Option opt;
 	std::vector<std::string> vs;
+	bool mulPreOnly;
 	opt.appendVec(&vs, "set", ": select from {add,sub,add2,sub2,mul,sqr,mul2,sqr2,mulPre,mod,sqrPre}");
 	opt.appendOpt(&mode, TEST_MODE | BENCH_MODE, "mode", ": test(1), bench(2), both(3), default(3)");
+	opt.appendBoolOpt(&mulPreOnly, "mulPre", "mulPre only");
 	opt.appendHelp("h");
 	if (!opt.parse(argc, argv)) {
 		opt.usage();
@@ -348,6 +460,11 @@ int main(int argc, char *argv[]) {
 	if (!b) {
 		fprintf(stderr, "Fp2::init error\n");
 		return 1;
+	}
+
+	if (mulPreOnly) {
+		mulPreOnlyBench();
+		return 0;
 	}
 
 	if (mode & BENCH_MODE) {

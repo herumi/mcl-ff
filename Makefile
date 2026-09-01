@@ -111,8 +111,28 @@ src/bench_x64.S: src/gen_ff_x64.py $(GEN_STAMP)
 $(BENCH_X64_OBJ): src/bench_x64.S
 	$(CXX) -c -o $@ $< -fPIC
 endif
-$(BENCH_EXE): test/bench.cpp obj/bench_llvm.o $(BENCH_X64_OBJ) $(HEADER)
-	$(CXX) -o $@ $< obj/bench_llvm.o $(BENCH_X64_OBJ) $(CFLAGS) $(MCL_LIB) $(BENCH_LDFLAGS)
+# Size-swept mulPre for bench.exe -mulPre: llvm_n<n>_mulPre (and x64_n<n>_mulPre
+# on x86_64) for n = 2..8. mulPre depends only on the limb count n, so any odd
+# n-limb value serves as p; 2^(64n-1)+1 is used. gen_ff.py names the global
+# holding p per characteristic (llvm_n<n>_p here), so the objects all link
+# into one executable without renaming.
+MULPRE_N=2 3 4 5 6 7 8
+MULPRE_OBJ=$(foreach n,$(MULPRE_N),obj/mulPre_llvm_n$(n).o)
+src/mulPre_llvm_n%.ll: src/gen_ff.py src/s_xbyak_llvm.py
+	$(PYTHON) src/gen_ff.py -u 64 -p `$(PYTHON) -c "print(hex((1<<(64*$*-1))+1))"` -pre llvm_n$*_ -mulPre > $@
+obj/mulPre_llvm_n%.o: src/mulPre_llvm_n%.ll
+	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
+ifeq ($(ARCH),x86_64)
+MULPRE_OBJ+=$(foreach n,$(MULPRE_N),obj/mulPre_x64_n$(n).o)
+src/mulPre_x64_n%.S: src/gen_ff_x64.py src/s_xbyak.py
+	$(PYTHON) src/gen_ff_x64.py -m gas -p `$(PYTHON) -c "print(hex((1<<(64*$*-1))+1))"` -pre x64_n$*_ -mulPre > $@
+obj/mulPre_x64_n%.o: src/mulPre_x64_n%.S
+	$(CXX) -c -o $@ $< -fPIC
+endif
+.PRECIOUS: src/mulPre_llvm_n%.ll src/mulPre_x64_n%.S
+
+$(BENCH_EXE): test/bench.cpp obj/bench_llvm.o $(BENCH_X64_OBJ) $(MULPRE_OBJ) $(HEADER)
+	$(CXX) -o $@ $< obj/bench_llvm.o $(BENCH_X64_OBJ) $(MULPRE_OBJ) $(CFLAGS) $(MCL_LIB) $(BENCH_LDFLAGS)
 bench: $(BENCH_EXE)
 	$(BENCH_EXE)
 
