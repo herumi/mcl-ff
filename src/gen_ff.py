@@ -516,6 +516,20 @@ def gen_mulPre(name, N, mulUnit):
     ret(Void)
   return f
 
+# mulPreWide: pz[2N] = px[N] * py[N] via a single wide "mul i(2*bit)"
+def gen_mulPreWide(name, N):
+  resetGlobalIdx()
+  pz = IntPtr(unit)
+  px = IntPtr(unit)
+  py = IntPtr(unit)
+  bit = unit * N
+  with Function(name, Void, pz, px, py) as f:
+    x = zext(loadN(px, N), bit * 2)
+    y = zext(loadN(py, N), bit * 2)
+    storeN(mul(x, y), pz)
+    ret(Void)
+  return f
+
 # If True then sqrPre(z, x) is a call to mulPre(z, x, x), as in mcl's
 # gen_mcl_fpDbl_sqrPre, instead of the dedicated schedule below.
 # This used to be the fastest variant: the old row-major triangle accumulation
@@ -712,6 +726,7 @@ def main():
   parser.add_argument('-mod', action='store_true', default=False, help='add mod (Montgomery reduction) function')
   parser.add_argument('-mod128', action='store_true', default=False, help='add mod128 (radix-2^128 Montgomery reduction) function')
   parser.add_argument('-mulPre', action='store_true', default=False, help='add mulPre function (z[2N] = x*y, no reduction)')
+  parser.add_argument('-mulPreWide', action='store_true', default=False, help='add mulPreWide function (mulPre by a single wide LLVM mul, for bench)')
   parser.add_argument('-sqrPre', action='store_true', default=False, help='add sqrPre function (z[2N] = x^2, no reduction)')
   parser.add_argument('-fp2_mul', action='store_true', default=False, help='add Fp2 mul function (Karatsuba + Montgomery reduction)')
   parser.add_argument('-fp2_sqr', action='store_true', default=False, help='add Fp2 sqr function (2 fused Montgomery mul)')
@@ -791,6 +806,8 @@ def main():
   mulPreF = None
   if opt.mulPre:
     mulPreF = gen_mulPre(f'{opt.pre}mulPre', mont.pn, mulUnit)
+  if opt.mulPreWide:
+    gen_mulPreWide(f'{opt.pre}mulPreWide', mont.pn)
   if opt.sqrPre:
     gen_sqrPre(f'{opt.pre}sqrPre', mont.pn, mulPreF)
   if opt.fp2_mul and not mont.isFullBit:

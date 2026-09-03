@@ -111,15 +111,15 @@ src/bench_x64.S: src/gen_ff_x64.py $(GEN_STAMP)
 $(BENCH_X64_OBJ): src/bench_x64.S
 	$(CXX) -c -o $@ $< -fPIC
 endif
-# Size-swept mulPre for bench.exe -mulPre: llvm_n<n>_mulPre (and x64_n<n>_mulPre
-# on x86_64) for n = 2..8. mulPre depends only on the limb count n, so any odd
+# Size-swept mulPre for bench.exe -mulPre: llvm_n<n>_mulPre, llvm_n<n>_mulPreWide
+# (a single wide LLVM mul) and, on x86_64, x64_n<n>_mulPre for n = 2..8. mulPre depends only on the limb count n, so any odd
 # n-limb value serves as p; 2^(64n-1)+1 is used. gen_ff.py names the global
 # holding p per characteristic (llvm_n<n>_p here), so the objects all link
 # into one executable without renaming.
 MULPRE_N=2 3 4 5 6 7 8
 MULPRE_OBJ=$(foreach n,$(MULPRE_N),obj/mulPre_llvm_n$(n).o)
 src/mulPre_llvm_n%.ll: src/gen_ff.py src/s_xbyak_llvm.py
-	$(PYTHON) src/gen_ff.py -u 64 -p `$(PYTHON) -c "print(hex((1<<(64*$*-1))+1))"` -pre llvm_n$*_ -mulPre > $@
+	$(PYTHON) src/gen_ff.py -u 64 -p `$(PYTHON) -c "print(hex((1<<(64*$*-1))+1))"` -pre llvm_n$*_ -mulPre -mulPreWide > $@
 obj/mulPre_llvm_n%.o: src/mulPre_llvm_n%.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
 ifeq ($(ARCH),x86_64)

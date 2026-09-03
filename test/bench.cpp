@@ -330,8 +330,17 @@ void check_and_bench(int mode, const char *name, size_t loop, F base, std::initi
 // Size-swept mulPre variants for mulPreOnlyBench (bench.exe -mulPre):
 // z[2n] = x[n] * y[n] for n = 2..8, generated from n-limb dummy odd p
 // (mulPre depends only on the limb count, not on p) regardless of TYPE.
+// llvm_n<n>_mulPreWide is a single wide LLVM "mul i(128n)" on zext'ed
+// operands (the schedule is left entirely to LLVM) for comparison.
 // See the MULPRE_N rules in the Makefile.
 extern "C" {
+	void llvm_n2_mulPreWide(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_n3_mulPreWide(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_n4_mulPreWide(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_n5_mulPreWide(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_n6_mulPreWide(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_n7_mulPreWide(uint64_t*, const uint64_t*, const uint64_t*);
+	void llvm_n8_mulPreWide(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_n2_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_n3_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
 	void llvm_n4_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
@@ -373,21 +382,22 @@ static void refMulPre(uint64_t *z, const uint64_t *x, const uint64_t *y, int n)
 	}
 }
 
-// throughput of llvm_mulPre vs x64_mulPre for each limb count n = 2..8
+// throughput of llvm_mulPre vs llvm_mulPreWide vs x64_mulPre for each limb
+// count n = 2..8
 void mulPreOnlyBench()
 {
 	const int maxN = 8;
-	const struct { int n; FpOp llvmF; FpOp x64F; } tbl[] = {
-		{ 2, llvm_n2_mulPre, x64_n2_mulPre },
-		{ 3, llvm_n3_mulPre, x64_n3_mulPre },
-		{ 4, llvm_n4_mulPre, x64_n4_mulPre },
-		{ 5, llvm_n5_mulPre, x64_n5_mulPre },
-		{ 6, llvm_n6_mulPre, x64_n6_mulPre },
-		{ 7, llvm_n7_mulPre, x64_n7_mulPre },
-		{ 8, llvm_n8_mulPre, x64_n8_mulPre },
+	const struct { int n; FpOp llvmF; FpOp wideF; FpOp x64F; } tbl[] = {
+		{ 2, llvm_n2_mulPre, llvm_n2_mulPreWide, x64_n2_mulPre },
+		{ 3, llvm_n3_mulPre, llvm_n3_mulPreWide, x64_n3_mulPre },
+		{ 4, llvm_n4_mulPre, llvm_n4_mulPreWide, x64_n4_mulPre },
+		{ 5, llvm_n5_mulPre, llvm_n5_mulPreWide, x64_n5_mulPre },
+		{ 6, llvm_n6_mulPre, llvm_n6_mulPreWide, x64_n6_mulPre },
+		{ 7, llvm_n7_mulPre, llvm_n7_mulPreWide, x64_n7_mulPre },
+		{ 8, llvm_n8_mulPre, llvm_n8_mulPreWide, x64_n8_mulPre },
 	};
 	cybozu::XorShift rg;
-	// correctness first: both against the __int128 reference
+	// correctness first: all against the __int128 reference
 	for (const auto& e : tbl) {
 		for (int i = 0; i < 1000; i++) {
 			uint64_t x[maxN], y[maxN], z[maxN*2], zr[maxN*2];
@@ -399,6 +409,11 @@ void mulPreOnlyBench()
 			e.llvmF(z, x, y);
 			if (memcmp(zr, z, e.n * 2 * sizeof(uint64_t)) != 0) {
 				fprintf(stderr, "ERR llvm mulPre n=%d i=%d\n", e.n, i);
+				exit(1);
+			}
+			e.wideF(z, x, y);
+			if (memcmp(zr, z, e.n * 2 * sizeof(uint64_t)) != 0) {
+				fprintf(stderr, "ERR llvm mulPreWide n=%d i=%d\n", e.n, i);
 				exit(1);
 			}
 			if (e.x64F) {
@@ -415,7 +430,7 @@ void mulPreOnlyBench()
 #else
 	printf("mulPre throughput (P=4 independent streams), unit: ns/op\n");
 #endif
-	printf("%2s %10s %10s %9s\n", "N", "llvm", "x64", "x64/llvm");
+	printf("%2s %10s %10s %10s %9s %9s\n", "N", "llvm", "wide", "x64", "wide/llvm", "x64/llvm");
 	const size_t P = 4;
 	const size_t loop = 10000000;
 	static uint64_t a[P][maxN], y[maxN], dst[P][maxN*2];
@@ -424,15 +439,17 @@ void mulPreOnlyBench()
 	for (const auto& e : tbl) {
 		FpOp f = e.llvmF;
 		double tLlvm = measure([&](size_t k) { f(dst[k], a[k], y); }, P, loop);
+		f = e.wideF;
+		double tWide = measure([&](size_t k) { f(dst[k], a[k], y); }, P, loop);
 		double tX64 = 0;
 		if (e.x64F) {
 			f = e.x64F;
 			tX64 = measure([&](size_t k) { f(dst[k], a[k], y); }, P, loop);
 		}
 		if (tX64 > 0) {
-			printf("%2d %10.3f %10.3f %8.2fx\n", e.n, tLlvm, tX64, tX64 / tLlvm);
+			printf("%2d %10.3f %10.3f %10.3f %8.2fx %8.2fx\n", e.n, tLlvm, tWide, tX64, tWide / tLlvm, tX64 / tLlvm);
 		} else {
-			printf("%2d %10.3f %10s %9s\n", e.n, tLlvm, "-", "-");
+			printf("%2d %10.3f %10.3f %10s %8.2fx %9s\n", e.n, tLlvm, tWide, "-", tWide / tLlvm, "-");
 		}
 	}
 }
