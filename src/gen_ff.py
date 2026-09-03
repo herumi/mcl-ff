@@ -1,64 +1,20 @@
+import os
+import sys
+import argparse
 from s_xbyak_llvm import *
 from mont import *
 from primetbl import *
-import argparse
+# common.py (helpers shared with gen.py / gen_bint.py) lives in mcl:
+# $MCL_DIR/src, default ../mcl relative to this repository.
+# append (not insert) so that s_xbyak_llvm.py of this repository is imported
+# first and common.py shares that module instance.
+mclDir = os.environ.get('MCL_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'mcl'))
+sys.path.append(os.path.join(mclDir, 'src'))
+import common
 
 unit = 0
 unit2 = 0
 mont = None
-
-def gen_add(N):
-  bit = unit * N
-  resetGlobalIdx()
-  pz = IntPtr(unit)
-  px = IntPtr(unit)
-  py = IntPtr(unit)
-  with Function(f'mcl_fp_addPre{N}', Void, pz, px, py):
-    x = zext(loadN(px, N), bit + unit)
-    y = zext(loadN(py, N), bit + unit)
-    z = add(x, y)
-    storeN(trunc(z, bit), pz)
-    r = trunc(lshr(z, bit), unit)
-    ret(Void)
-
-def gen_mulUU():
-  resetGlobalIdx();
-  z = Int(unit2)
-  x = Int(unit)
-  y = Int(unit)
-  with Function(f'mul{unit}x{unit}L', z, x, y, private=True) as f:
-    x = zext(x, unit2)
-    y = zext(y, unit2)
-    z = mul(x, y)
-    ret(z)
-  return f
-
-def gen_extractHigh():
-  resetGlobalIdx()
-  z = Int(unit)
-  x = Int(unit2)
-  with Function(f'extractHigh{unit}', z, x, private=True) as f:
-    x = lshr(x, unit)
-    z = trunc(x, unit)
-    ret(z)
-  return f
-
-def gen_mulPos(mulUU):
-  resetGlobalIdx()
-  xy = Int(unit2)
-  px = IntPtr(unit)
-  y = Int(unit)
-  i = Int(unit)
-  with Function(f'mulPos{unit}x{unit}', xy, px, y, i, private=True) as f:
-    x = load(getelementptr(px, i))
-    xy = call(mulUU, x, y)
-    ret(xy)
-  return f
-
-def gen_once():
-  mulUU = gen_mulUU()
-  gen_extractHigh()
-  gen_mulPos(mulUU)
 
 def gen_add_raw(x, y, p, isFullBit):
   bit = x.bit
@@ -214,51 +170,6 @@ def gen_fp2_sub(name, N, subTbl, dataVar, useMask, offset):
 
     ret(Void)
 
-# split x into (high, low) with low being sizeL bits
-def split(x, sizeL):
-  H = lshr(x, sizeL)
-  H = trunc(H, x.bit - sizeL)
-  L = trunc(x, sizeL)
-  return (H, L)
-
-# return [xs[n-1]:xs[n-2]:...:xs[0]]
-def pack(xs):
-  x = xs[0]
-  for y in xs[1:]:
-    shift = x.bit
-    size = x.bit + y.bit
-    x = zext(x, size)
-    y = zext(y, size)
-    y = shl(y, shift)
-    x = or_(x, y)
-  return x
-
-def gen_mulUnit(name, N, mulPos, extractHigh):
-  bit = unit * N
-  bu = bit + unit
-  resetGlobalIdx()
-  z = Int(bu)
-  px = IntPtr(unit)
-  y = Int(unit)
-  # alwaysinline: for N >= 8 clang stops inlining this into mulPre and the
-  # 2N call round-trips cost ~1.7x in throughput (see memo.md 2026-08-31)
-  with Function(name, z, px, y, private=True, alwaysinline=True) as f:
-    L = []
-    H = []
-    for i in range(N):
-      xy = call(mulPos, px, y, Imm(i, unit))
-      L.append(trunc(xy, unit))
-      H.append(call(extractHigh, xy))
-
-    LL = pack(L)
-    HH = pack(H)
-    LL = zext(LL, bu)
-    HH = zext(HH, bu)
-    HH = shl(HH, unit)
-    z = add(LL, HH)
-    ret(z)
-  return f
-
 def gen_mul(name, mont, dataVar, mulUnit):
   N = mont.pn
   bit = unit * N
@@ -350,7 +261,7 @@ def mod_raw(lo, getHi, mont, pp, mulUnit):
     t = add(t, pq)
     t = lshr(t, unit)
     t = trunc(t, bu)
-    H, t = split(t, bit)
+    H, t = common.split(t, bit)
   if mont.isFullBit:
     p = zext(p, bu)
     t = pack([t, H])
@@ -413,7 +324,7 @@ def mod128_raw(lo, getHi, mont, pp, mulUnit):
       t = add(zext(t, bu2), zext(pq, bu2))
       t = lshr(t, unit)
       t = trunc(t, bu)
-      H, t = split(t, bit)
+      H, t = common.split(t, bit)
   vc = sub(t, p)
   c = trunc(lshr(vc, bit - 1), 1)
   return select(c, t, vc)
@@ -483,36 +394,15 @@ def gen_mul128(name, mont, dataVar, mulUnit):
     ret(Void)
   return f
 
-# pz[2N] = px[N] * py[N] (no reduction). Port of gen.py:generic_fpDbl_mul of
-# mcl: schoolbook rows x * y[i] accumulated in the bit+unit accumulator t, whose
-# bottom unit is final after each row and is stored immediately.
-def mulPre_raw(pz, px, py, N, mulUnit):
-  if N == 1:
-    x = zext(load(px), unit2)
-    y = zext(load(py), unit2)
-    storeN(mul(x, y), pz)
-    return
-  y = load(py)
-  xy = call(mulUnit, px, y)
-  store(trunc(xy, unit), pz)
-  t = lshr(xy, unit)
-  for i in range(1, N):
-    y = load(getelementptr(py, i))
-    xy = call(mulUnit, px, y)
-    t = add(t, xy)
-    if i < N - 1:
-      storeN(trunc(t, unit), pz, i)
-      t = lshr(t, unit)
-  storeN(t, pz, N - 1)
-
-# mulPre: pz[2N] = px[N] * py[N] (no reduction).
+# mulPre: pz[2N] = px[N] * py[N] (no reduction); the schoolbook body is
+# common.emit_mulPre (shared with mclb_mul of gen_bint.py).
 def gen_mulPre(name, N, mulUnit):
   resetGlobalIdx()
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
   with Function(name, Void, pz, px, py) as f:
-    mulPre_raw(pz, px, py, N, mulUnit)
+    common.emit_mulPre(unit, N, pz, px, py, mulUnit)
     ret(Void)
   return f
 
@@ -799,10 +689,12 @@ def main():
     gen_fp_sub(f'{opt.pre}sub', mont.pn, subTbl, dataVar, opt.sub_mask)
     gen_fp2_sub(f'{opt.pre2}sub', mont.pn, subTbl, dataVar, opt.sub_mask, opt.offset)
 
-  mulUU = gen_mulUU()
-  extractHigh = gen_extractHigh()
-  mulPos = gen_mulPos(mulUU)
-  mulUnit = gen_mulUnit(f'{opt.pre}mulUnit', mont.pn, mulPos, extractHigh)
+  mulUU = common.gen_mulUU(unit)
+  extractHigh = common.gen_extractHigh(unit)
+  mulPos = common.gen_mulPos(unit, mulUU)
+  # alwaysinline: for N >= 8 clang stops inlining mulUnit into mulPre and the
+  # 2N call round-trips cost ~1.7x in throughput (see memo.md 2026-08-31)
+  mulUnit = common.gen_mulPv(f'{opt.pre}mulUnit', unit, mont.pn, mulPos, extractHigh, private=True, alwaysinline=True)
 
   mulF = None
   if opt.mul:
