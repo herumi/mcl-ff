@@ -159,7 +159,11 @@ a64asm: $(LL)
 
 -include $(DEPEND_FILE)
 
-.PHONY: clean bench
+# s_xbyak.py and s_xbyak_llvm.py are maintained in ../s_xbyak (as in mcl)
+update_s_xbyak:
+	cp -a ../s_xbyak/s_xbyak.py ../s_xbyak/s_xbyak_llvm.py src/
+
+.PHONY: clean bench update_s_xbyak
 
 clean:
 	rm -rf src/*.s src/*.S src/*.ll obj/*.o obj/*.d $(HEADER) bin/*.exe
