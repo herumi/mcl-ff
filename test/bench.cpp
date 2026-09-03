@@ -365,6 +365,29 @@ extern "C" {
 	#define x64_n7_mulPre ((FpOp)nullptr)
 	#define x64_n8_mulPre ((FpOp)nullptr)
 #endif
+	// z[2n] = x[n]^2 for sqrPreOnlyBench (bench.exe -sqrPre); x64 has only
+	// the hand-scheduled n = 4, 6
+	void llvm_n2_sqrPre(uint64_t*, const uint64_t*);
+	void llvm_n3_sqrPre(uint64_t*, const uint64_t*);
+	void llvm_n4_sqrPre(uint64_t*, const uint64_t*);
+	void llvm_n5_sqrPre(uint64_t*, const uint64_t*);
+	void llvm_n6_sqrPre(uint64_t*, const uint64_t*);
+	void llvm_n7_sqrPre(uint64_t*, const uint64_t*);
+	void llvm_n8_sqrPre(uint64_t*, const uint64_t*);
+	void llvm_n2_sqrPreWide(uint64_t*, const uint64_t*);
+	void llvm_n3_sqrPreWide(uint64_t*, const uint64_t*);
+	void llvm_n4_sqrPreWide(uint64_t*, const uint64_t*);
+	void llvm_n5_sqrPreWide(uint64_t*, const uint64_t*);
+	void llvm_n6_sqrPreWide(uint64_t*, const uint64_t*);
+	void llvm_n7_sqrPreWide(uint64_t*, const uint64_t*);
+	void llvm_n8_sqrPreWide(uint64_t*, const uint64_t*);
+#ifdef MCL_X64_ASM
+	void x64_n4_sqrPre(uint64_t*, const uint64_t*);
+	void x64_n6_sqrPre(uint64_t*, const uint64_t*);
+#else
+	#define x64_n4_sqrPre ((FpOp1)nullptr)
+	#define x64_n6_sqrPre ((FpOp1)nullptr)
+#endif
 }
 
 // z[2n] = x[n] * y[n] schoolbook reference with __int128
@@ -433,7 +456,9 @@ void mulPreOnlyBench()
 	printf("%2s %10s %10s %10s %9s %9s\n", "N", "llvm", "wide", "x64", "wide/llvm", "x64/llvm");
 	const size_t P = 4;
 	const size_t loop = 10000000;
-	static uint64_t a[P][maxN], y[maxN], dst[P][maxN*2];
+	// on the stack as in benchmark(): the same arrays in .bss (static) made
+	// llvm_n6_sqrPre ~10% slower (7.4 vs 6.8 ns) while x64 was unaffected
+	uint64_t a[P][maxN], y[maxN], dst[P][maxN*2];
 	for (size_t k = 0; k < P; k++) for (int j = 0; j < maxN; j++) a[k][j] = rg.get64();
 	for (int j = 0; j < maxN; j++) y[j] = rg.get64();
 	for (const auto& e : tbl) {
@@ -454,14 +479,84 @@ void mulPreOnlyBench()
 	}
 }
 
+// throughput of llvm_sqrPre vs llvm_sqrPreWide vs x64_sqrPre for each limb
+// count n = 2..8 (x64 only for n = 4, 6)
+void sqrPreOnlyBench()
+{
+	const int maxN = 8;
+	const struct { int n; FpOp1 llvmF; FpOp1 wideF; FpOp1 x64F; } tbl[] = {
+		{ 2, llvm_n2_sqrPre, llvm_n2_sqrPreWide, nullptr },
+		{ 3, llvm_n3_sqrPre, llvm_n3_sqrPreWide, nullptr },
+		{ 4, llvm_n4_sqrPre, llvm_n4_sqrPreWide, x64_n4_sqrPre },
+		{ 5, llvm_n5_sqrPre, llvm_n5_sqrPreWide, nullptr },
+		{ 6, llvm_n6_sqrPre, llvm_n6_sqrPreWide, x64_n6_sqrPre },
+		{ 7, llvm_n7_sqrPre, llvm_n7_sqrPreWide, nullptr },
+		{ 8, llvm_n8_sqrPre, llvm_n8_sqrPreWide, nullptr },
+	};
+	cybozu::XorShift rg;
+	// correctness first: all against the __int128 reference (mulPre(x, x))
+	for (const auto& e : tbl) {
+		for (int i = 0; i < 1000; i++) {
+			uint64_t x[maxN], z[maxN*2], zr[maxN*2];
+			for (int j = 0; j < e.n; j++) x[j] = rg.get64();
+			refMulPre(zr, x, x, e.n);
+			e.llvmF(z, x);
+			if (memcmp(zr, z, e.n * 2 * sizeof(uint64_t)) != 0) {
+				fprintf(stderr, "ERR llvm sqrPre n=%d i=%d\n", e.n, i);
+				exit(1);
+			}
+			e.wideF(z, x);
+			if (memcmp(zr, z, e.n * 2 * sizeof(uint64_t)) != 0) {
+				fprintf(stderr, "ERR llvm sqrPreWide n=%d i=%d\n", e.n, i);
+				exit(1);
+			}
+			if (e.x64F) {
+				e.x64F(z, x);
+				if (memcmp(zr, z, e.n * 2 * sizeof(uint64_t)) != 0) {
+					fprintf(stderr, "ERR x64 sqrPre n=%d i=%d\n", e.n, i);
+					exit(1);
+				}
+			}
+		}
+	}
+#ifdef USE_CLK
+	printf("sqrPre throughput (P=4 independent streams), unit: tsc/op\n");
+#else
+	printf("sqrPre throughput (P=4 independent streams), unit: ns/op\n");
+#endif
+	printf("%2s %10s %10s %10s %9s %9s\n", "N", "llvm", "wide", "x64", "wide/llvm", "x64/llvm");
+	const size_t P = 4;
+	const size_t loop = 10000000;
+	uint64_t a[P][maxN], dst[P][maxN*2];  // on the stack, see mulPreOnlyBench
+	for (size_t k = 0; k < P; k++) for (int j = 0; j < maxN; j++) a[k][j] = rg.get64();
+	for (const auto& e : tbl) {
+		FpOp1 f = e.llvmF;
+		double tLlvm = measure([&](size_t k) { f(dst[k], a[k]); }, P, loop);
+		f = e.wideF;
+		double tWide = measure([&](size_t k) { f(dst[k], a[k]); }, P, loop);
+		double tX64 = 0;
+		if (e.x64F) {
+			f = e.x64F;
+			tX64 = measure([&](size_t k) { f(dst[k], a[k]); }, P, loop);
+		}
+		if (tX64 > 0) {
+			printf("%2d %10.3f %10.3f %10.3f %8.2fx %8.2fx\n", e.n, tLlvm, tWide, tX64, tWide / tLlvm, tX64 / tLlvm);
+		} else {
+			printf("%2d %10.3f %10.3f %10s %8.2fx %9s\n", e.n, tLlvm, tWide, "-", tWide / tLlvm, "-");
+		}
+	}
+}
+
 int main(int argc, char *argv[]) {
 	int mode;
 	cybozu::Option opt;
 	std::vector<std::string> vs;
 	bool mulPreOnly;
+	bool sqrPreOnly;
 	opt.appendVec(&vs, "set", ": select from {add,sub,add2,sub2,mul,sqr,mul2,sqr2,mulPre,mod,sqrPre}");
 	opt.appendOpt(&mode, TEST_MODE | BENCH_MODE, "mode", ": test(1), bench(2), both(3), default(3)");
 	opt.appendBoolOpt(&mulPreOnly, "mulPre", "mulPre only");
+	opt.appendBoolOpt(&sqrPreOnly, "sqrPre", "sqrPre only");
 	opt.appendHelp("h");
 	if (!opt.parse(argc, argv)) {
 		opt.usage();
@@ -481,6 +576,10 @@ int main(int argc, char *argv[]) {
 
 	if (mulPreOnly) {
 		mulPreOnlyBench();
+		return 0;
+	}
+	if (sqrPreOnly) {
+		sqrPreOnlyBench();
 		return 0;
 	}
 
