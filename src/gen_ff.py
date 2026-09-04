@@ -4,8 +4,10 @@ import argparse
 from s_xbyak_llvm import *
 from mont import *
 from primetbl import *
-# common.py (helpers shared with gen.py / gen_bint.py) lives in mcl:
-# $MCL_DIR/src, default ../mcl relative to this repository.
+# common.py (helpers shared with gen.py / gen_bint.py: gen_mulUU / gen_mulPos /
+# gen_mulPv / emit_mulPre / emit_fp_add / emit_fp_sub_raw / emit_mont /
+# emit_montRed / split) lives in mcl: $MCL_DIR/src, default ../mcl relative to
+# this repository.
 # append (not insert) so that s_xbyak_llvm.py of this repository is imported
 # first and common.py shares that module instance.
 mclDir = os.environ.get('MCL_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'mcl'))
@@ -15,24 +17,6 @@ import common
 unit = 0
 unit2 = 0
 mont = None
-
-def gen_add_raw(x, y, p, isFullBit):
-  bit = x.bit
-  if isFullBit:
-    x = zext(x, bit + unit)
-    y = zext(y, bit + unit)
-    x = add(x, y)
-    p = zext(p, bit + unit)
-    y = sub(x, p)
-    c = trunc(lshr(y, bit), 1)
-    x = select(c, x, y)
-    x = trunc(x, bit)
-  else:
-    x = add(x, y)
-    y = sub(x, p)
-    c = trunc(lshr(y, bit - 1), 1)
-    x = select(c, x, y)
-  return x
 
 def gen_fp_add(name, N, dataVar):
   bit = unit * N
@@ -47,7 +31,7 @@ def gen_fp_add(name, N, dataVar):
     x = loadN(px, N, volatile=True)
     y = loadN(py, N, volatile=True)
     p = loadN(pp, N)
-    x = gen_add_raw(x, y, p, mont.isFullBit)
+    x = common.emit_fp_add(unit, x, y, p, mont.isFullBit)
     storeN(x, pz)
     ret(Void)
 
@@ -63,7 +47,7 @@ def gen_fp2_add(name, N, dataVar, offset):
     for i in range(2):
       x = loadN(px, N, offset=i*offset, volatile=True)
       y = loadN(py, N, offset=i*offset, volatile=True)
-      x = gen_add_raw(x, y, p, mont.isFullBit)
+      x = common.emit_fp_add(unit, x, y, p, mont.isFullBit)
       storeN(x, pz, offset=i*offset)
 
     ret(Void)
@@ -89,15 +73,7 @@ def makeSubTbl(pre, mont):
 # folded memory operands: the same idiom as the hand-written x64 asm.
 def gen_sub_raw_tbl(x, y, ptbl, Npad, isFullBit):
   bit = x.bit
-  if isFullBit:
-    x = zext(x, bit + unit)
-    y = zext(y, bit + unit)
-    v = sub(x, y)
-    c = trunc(lshr(v, bit), 1)
-    v = trunc(v, bit)
-  else:
-    v = sub(x, y)
-    c = trunc(lshr(v, bit - 1), 1)
+  v, c = common.emit_fp_sub_raw(unit, x, y, isFullBit)
   off = shl(zext(c, unit), Npad.bit_length() - 1)
   addr = getelementptr(ptbl, off)
   p = load(bitcast(addr, bit))
@@ -114,15 +90,7 @@ def gen_sub_raw_tbl(x, y, ptbl, Npad, isFullBit):
 # selected by -sub_mask (passed by the Makefile on non-x86_64).
 def gen_sub_raw_mask(x, y, p, isFullBit):
   bit = x.bit
-  if isFullBit:
-    x = zext(x, bit + unit)
-    y = zext(y, bit + unit)
-    v = sub(x, y)
-    c = trunc(lshr(v, bit), 1)
-    v = trunc(v, bit)
-  else:
-    v = sub(x, y)
-    c = trunc(lshr(v, bit - 1), 1)
+  v, c = common.emit_fp_sub_raw(unit, x, y, isFullBit)
   v = add(v, and_(p, sext(c, bit)))
   return v
 
@@ -170,112 +138,23 @@ def gen_fp2_sub(name, N, subTbl, dataVar, useMask, offset):
 
     ret(Void)
 
+# Fused Montgomery mul: z = x y R^-1 mod p; the body is common.emit_mont
+# (shared with mcl_fp_mont of gen.py), with ip passed as an immediate.
 def gen_mul(name, mont, dataVar, mulUnit):
   N = mont.pn
-  bit = unit * N
-  bu = bit + unit
-  bu2 = bit + unit * 2
   resetGlobalIdx()
   pz = IntPtr(unit)
   px = IntPtr(unit)
   py = IntPtr(unit)
   with Function(name, Void, pz, px, py) as f:
     pp = bitcast(dataVar, unit)
-    ipval = mont.ip
-    if mont.isFullBit:
-      for i in range(N):
-        y = load(getelementptr(py, i))
-        xy = call(mulUnit, px, y)
-        if i == 0:
-          a = zext(xy, bu2)
-          at = trunc(xy, unit)
-        else:
-          xy = zext(xy, bu2)
-          a = add(s, xy)
-          at = trunc(a, unit)
-        q = mul(at, ipval)
-        pq = call(mulUnit, pp, q)
-        pq = zext(pq, bu2)
-        t = add(a, pq)
-        s = lshr(t, unit)
-
-      s = trunc(s, bu)
-      p = zext(loadN(pp, N), bu)
-      vc = sub(s, p)
-      c = trunc(lshr(vc, bit), 1)
-      z = select(c, s, vc)
-      z = trunc(z, bit)
-      storeN(z, pz)
-    else:
-      y = load(py)
-      xy = call(mulUnit, px, y)
-      c0 = trunc(xy, unit)
-      q = mul(c0, ipval)
-      pq = call(mulUnit, pp, q)
-      t = add(xy, pq)
-      t = lshr(t, unit)
-      for i in range(1, N):
-        y = load(getelementptr(py, i))
-        xy = call(mulUnit, px, y)
-        t = add(t, xy)
-        c0 = trunc(t, unit)
-        q = mul(c0, ipval)
-        pq = call(mulUnit, pp, q)
-        t = add(t, pq)
-        t = lshr(t, unit)
-      t = trunc(t, bit)
-      vc = sub(t, loadN(pp, N))
-      c = trunc(lshr(vc, bit - 1), 1)
-      z = select(c, t, vc)
-      storeN(z, pz)
+    common.emit_mont(unit, N, pz, px, py, pp, mont.ip, mulUnit, mont.isFullBit)
     ret(Void)
   return f
 
-# Montgomery reduction core: reduce a 2N-unit value to z = xy R^-1 mod p and
-# return it (bit wide). The low N units come packed in lo; the high units are
-# fetched one per iteration via getHi(i) -> unit-wide limb N+i, so the caller
-# chooses the source (memory for gen_mod, an SSA value for gen_sqr).
-def mod_raw(lo, getHi, mont, pp, mulUnit):
-  N = mont.pn
-  bit = unit * N
-  bu = bit + unit
-  bu2 = bit + unit * 2
-  ipval = mont.ip
-  p = loadN(pp, N)
-  t = lo
-  H = None
-  for i in range(N):
-    if N == 1:
-      q = mul(t, ipval)
-    else:
-      q = mul(trunc(t, unit), ipval)
-    pq = call(mulUnit, pp, q)
-    if i > 0:
-      H = zext(H, bu)
-      H = shl(H, bit)
-      pq = add(pq, H)
-    nxt = getHi(i)
-    t = pack([t, nxt])
-    t = zext(t, bu2)
-    pq = zext(pq, bu2)
-    t = add(t, pq)
-    t = lshr(t, unit)
-    t = trunc(t, bu)
-    H, t = common.split(t, bit)
-  if mont.isFullBit:
-    p = zext(p, bu)
-    t = pack([t, H])
-    vc = sub(t, p)
-    c = trunc(lshr(vc, bit), 1)
-    z = select(c, t, vc)
-    z = trunc(z, bit)
-  else:
-    vc = sub(t, p)
-    c = trunc(lshr(vc, bit - 1), 1)
-    z = select(c, t, vc)
-  return z
-
-# Montgomery reduction: z = xy R^-1 mod p where xy has 2N units.
+# Montgomery reduction: z = xy R^-1 mod p where xy has 2N units; the body is
+# common.emit_montRed (shared with mcl_fp_montRed of gen.py). The high units
+# are fetched from memory via the getHi callback (gen_sqr passes an SSA value).
 def gen_mod(name, mont, dataVar, mulUnit):
   N = mont.pn
   resetGlobalIdx()
@@ -284,18 +163,19 @@ def gen_mod(name, mont, dataVar, mulUnit):
   with Function(name, Void, pz, pxy) as f:
     pp = bitcast(dataVar, unit)
     lo = loadN(pxy, N)
-    z = mod_raw(lo, lambda i: load(getelementptr(pxy, N + i)), mont, pp, mulUnit)
+    p = loadN(pp, N)
+    z = common.emit_montRed(unit, N, lo, lambda i: load(getelementptr(pxy, N + i)), pp, p, mont.ip, mulUnit, mont.isFullBit)
     storeN(z, pz)
     ret(Void)
   return f
 
-# Radix-2^128 variant of mod_raw. The serial recurrence of mod_raw
+# Radix-2^128 variant of common.emit_montRed. The serial recurrence of it
 # (t0 -> q = t0*ip -> p[0]*q -> new t0, ~8-9 cycles/unit on Apple M4) is the
 # bottleneck of the reduction, so q is computed two units at a time from the
 # current t via ip2 = -p^-1 mod 2^128: the odd step's q no longer waits for
 # the even step's accumulation and the recurrence has half as many stages.
 # The cost is hi64((t mod 2^128) * ip2) (umulh + 2 madd per pair). The
-# accumulation is kept in exactly the shape of mod_raw: merging the two p*q
+# accumulation is kept in exactly the shape of emit_montRed: merging the two p*q
 # rows before adding them to t makes clang interleave two carry chains via
 # mrs/msr NZCV and costs 10% throughput. See memo.md 2026-08-03.
 # Requires N even and p not full bit.
@@ -496,7 +376,7 @@ USE_MUL_FOR_SQR = True
 
 # sqr: z = x^2 R^-1 mod p. A call to mul (see USE_MUL_FOR_SQR above), or the
 # fused variant: the 2N-unit product of sqrPre_raw stays in one SSA value and
-# is reduced in place by mod_raw, so the intermediate never goes through
+# is reduced in place by emit_montRed, so the intermediate never goes through
 # memory and the call overhead of a sqrPre + mod pair is gone.
 def gen_sqr(name, mont, dataVar, mulUnit, mulF):
   N = mont.pn
@@ -513,7 +393,8 @@ def gen_sqr(name, mont, dataVar, mulUnit, mulF):
     x = [load(getelementptr(px, i)) for i in range(N)]
     xy = sqrPre_raw(x, N)
     lo = trunc(xy, bit)
-    z = mod_raw(lo, lambda i: trunc(lshr(xy, bit + i * unit), unit), mont, pp, mulUnit)
+    p = loadN(pp, N)
+    z = common.emit_montRed(unit, N, lo, lambda i: trunc(lshr(xy, bit + i * unit), unit), pp, p, mont.ip, mulUnit, mont.isFullBit)
     storeN(z, pz)
     ret(Void)
 
