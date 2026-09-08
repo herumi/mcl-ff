@@ -8,6 +8,8 @@ MCL_DIR?=../mcl
 # gen_ff.py imports $(MCL_DIR)/src/common.py
 export MCL_DIR
 COMMON_PY=$(MCL_DIR)/src/common.py
+# gen_ff_x64.py imports $(MCL_DIR)/src/gen_bint_x64.py (x64 modp)
+GEN_BINT_X64_PY=$(MCL_DIR)/src/gen_bint_x64.py
 MCL_LIB=-lmcl -L $(MCL_DIR)/lib
 ARCH?=$(shell uname -m)
 
@@ -57,7 +59,7 @@ GEN_OPT=-add -sub -mul -modp2 -modp3 $(SUB_OPT)
 endif
 
 ifeq ($(ARCH),x86_64)
-$(X64_ASM): src/gen_ff_x64.py $(GEN_STAMP)
+$(X64_ASM): src/gen_ff_x64.py $(GEN_BINT_X64_PY) $(GEN_STAMP)
 	$(PYTHON) $< -m gas > $@ -type $(TYPE) -mul -modp2 -modp3
 obj/$(NAME)_x64.o: $(X64_ASM)
 	$(CXX) -c -o $@ $< -fPIC
@@ -109,7 +111,7 @@ src/bench_llvm.ll: src/gen_ff.py src/s_xbyak_llvm.py $(COMMON_PY) $(GEN_STAMP)
 obj/bench_llvm.o: src/bench_llvm.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
 ifeq ($(ARCH),x86_64)
-src/bench_x64.S: src/gen_ff_x64.py $(GEN_STAMP)
+src/bench_x64.S: src/gen_ff_x64.py $(GEN_BINT_X64_PY) $(GEN_STAMP)
 	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul -mul_wo_adx -sqr -mulPre -mulPre_wo_adx -mod -mod128 -sqrPre -fp2_mul -fp2_sqr -modp2 -modp3 > $@
 $(BENCH_X64_OBJ): src/bench_x64.S
 	$(CXX) -c -o $@ $< -fPIC

@@ -3,6 +3,15 @@ from s_xbyak import *
 from primetbl import *
 from mont import *
 import argparse
+import os
+# the x64 modp generator (gen_modp_x64: dst[N] = src[srcN] mod p with the
+# parameter block of mcl::Modp) lives in mcl: $MCL_DIR/src/gen_bint_x64.py,
+# default ../mcl relative to this repository. append (not insert) so that
+# s_xbyak.py of this repository is imported first and gen_bint_x64.py shares
+# that module instance (the two copies are identical).
+mclDir = os.environ.get('MCL_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'mcl'))
+sys.path.append(os.path.join(mclDir, 'src'))
+import gen_bint_x64
 
 SIMD_BYTE = 64
 
@@ -72,14 +81,6 @@ def sub_pm(x, addr):
   n = len(x)
   for i in range(n):
     sub_ex(x[i], ptr(addr + i * 8), i == 0)
-
-def add_pm(x, addr):
-  n = len(x)
-  for i in range(n):
-    add_ex(x[i], ptr(addr + i * 8), i == 0)
-
-def cmovnc_pp(x, y):
-  make_vec_pp(cmovnc, x, y)
 
 def gen_add(name, mont):
   N = mont.pn
@@ -841,7 +842,7 @@ def gen_sqr(name, mont):
 # for saving the callee-saved registers. Since the assignment is positional,
 # a frame with more arguments/temps assigns the same prefix, so the caller's
 # sf.p[i] is the callee's p[i] on both ABIs.
-# z[N] = x[xN] mod p: x64 version of common.emit_modp2 (gen_ff.py -modp2),
+# z[N] = x[xN] mod p: x64 version of gen_ff.py's emit_modp2 (-modp2),
 # word-serial Barrett reduction with a one-word reciprocal and a single
 # conditional subtraction per step; see the comment in ../mcl/src/common.py.
 # p is known at generation time, so the shift t, c and Qd are immediates and
@@ -940,136 +941,6 @@ def gen_modp2(name, mont, xN=8):
       for k in range(xN - N, -1, -1):
         pk = modp2_step_x64(pk, ptr(px + k * 8), tmp, consts)
       store_mp(pz, pk)
-
-# one step of modp3: the same reduction as modp2_step_x64 but the constants
-# come from the parameter block para (the layout of common.modp2_param:
-# Qt = Q 2^s as two limbs q0, q1, then np[N]), so the code depends only on N.
-# The quotient estimate is y = (W Qt) >> 129 with W = [X_{N-1}, X_N], the top
-# two limbs of xx as they are (see the comment in ../mcl/src/common.py): a
-# 2x2-limb product (4 mulx) of which only the limbs 2, 3 are kept, and the
-# shift is an immediate shrd. The extraction of xx >> (L-2) with a variable
-# shift (shrd/shr by cl or shrx/shlx) costs about 2 cycles per step on
-# Sapphire Rapids, which is why the shift is folded into Qt instead.
-# The conditional subtraction is done as r + np: the carry out means r >= p
-# and the sum is r - p mod 2^(64N), so cmovnc restores the kept r (no p
-# constant); np is addressed from para. rdx (y, dead after the row) and rcx
-# are the last keep registers, so no register is needed beyond
-# tmp = [T0, T1, T2, T3] (T3 may be rax); rcx and rdx are clobbered.
-def modp3_step_x64(pk, pw, para, tmp):
-  N = len(pk)
-  T0, T1, T2, T3 = tmp
-  a0 = pk[N - 2]
-  a1 = pk[N - 1]
-  # [T1, T3, T2] = limbs 1, 2, 3 of [a0, a1] * [q0, q1] (limb 0 is not needed)
-  mov(rdx, ptr(para))  # q0
-  mulx(T2, T3, a0)   # T2 = hi(a0 q0)
-  mulx(T3, T1, a1)   # [T1, T3] = a1 q0
-  add(T1, T2)
-  adc(T3, 0)
-  mov(rdx, ptr(para + 8))  # q1
-  mulx(T2, T0, a0)   # [T0, T2] = a0 q1
-  add(T1, T0)
-  adc(T3, T2)
-  mulx(T2, T0, a1)   # [T0, T2] = a1 q1
-  adc(T2, 0)
-  add(T3, T0)
-  adc(T2, 0)
-  # X_N is consumed; its register takes w
-  mov(pk[N - 1], pw)
-  shrd(T3, T2, 1)    # y = [limb 2, limb 3] >> 1
-  mov(rdx, T3)
-  # xx = [w, r] in registers: rotate so that pk[0] = w
-  pk = [pk[N - 1]] + pk[0:N - 1]
-  # r = (xx + y np) mod 2^(64N)
-  pnp = para + 8 * 2
-  xor_(T0, T0)  # clear CF and OF
-  for i in range(N):
-    mulx(T0, T1, ptr(pnp + i * 8))
-    adox(pk[i], T1)
-    if i < N - 1:
-      adcx(pk[i + 1], T0)
-  # r -= p if r >= p : r + np carries out
-  keep = [T0, T1, T2, T3, rcx, rdx][0:N]
-  mov_pp(keep, pk)
-  add_pm(pk, pnp)
-  cmovnc_pp(pk, keep)
-  return pk
-
-# uint32_t modp3(Unit *dst, const Unit *src, size_t srcN, const Modp2 *para):
-# x64 version of gen_ff.py's modp3 (variable-length modp2): returns 0 if
-# srcN > xN, otherwise dst[N] = src[srcN] mod p and returns 1 (dst is src
-# zero-extended when srcN < N). Unlike modp2, the constants are read from
-# para (see modp3_step_x64), so the code depends only on N (one function
-# per N as in the LLVM version); p must not be full bit (r < 2p has to fit
-# in N limbs) and L >= 64(N-1) + 2. The xN - N + 1 steps are unrolled as in
-# modp2 with an exit test (sub/jc on the step count) after each, so
-# srcN - N + 1 steps run; each exit stores its own rotation of pk.
-# Registers (N = 6 uses all 15): src, count, para, pk[N], T0, T1 in the
-# frame, T2 = the register of dst (spilled to the stack until the exits),
-# T3 = rax, rcx and rdx for the keep list and mulx.
-def gen_modp3(name, xN=8, N=6):
-  assert N <= 6
-  align(16)
-  with FuncProc(name):
-    ret0L = Label()
-    # srcN > xN: return 0 before the prologue (3rd argument register)
-    cmp(getReg(2), xN)
-    ja(ret0L)
-    with StackFrame(4, N + 2, useRDX=True, useRCX=True, stackSizeByte=8) as sf:
-      pz = sf.p[0]
-      px = sf.p[1]
-      n = sf.p[2]
-      para = sf.p[3]
-      pk = sf.t[0:N]
-      mov(ptr(rsp), pz)
-      tmp = sf.t[N:N + 2] + [pz, rax]
-      smallL = Label()
-      exitL = Label()
-      cmp(n, N)
-      jb(smallL)
-      # r = top N-1 limbs of src = src[n - (N-1) .. n), X_N = 0
-      lea(rax, ptr(px + n * 8))
-      for i in range(N - 1):
-        mov(pk[i], ptr(rax - (N - 1 - i) * 8))
-      xor_(pk[N - 1], pk[N - 1])
-      lea(px, ptr(rax - N * 8))  # &src[n - N]
-      sub(n, N)                  # remaining steps - 1
-      exits = []
-      for j in range(xN - N + 1):
-        pk = modp3_step_x64(pk, ptr(px), para, tmp)
-        if j < xN - N:
-          doneL = Label()
-          sub(n, 1)
-          jc(doneL)
-          exits.append((doneL, pk))
-          sub(px, 8)
-      # the last step: n == 0 here
-      mov(rdx, ptr(rsp))
-      store_mp(rdx, pk)
-      jmp(exitL)
-      for (doneL, pk) in exits:
-        L(doneL)
-        mov(rdx, ptr(rsp))
-        store_mp(rdx, pk)
-        jmp(exitL)
-      # srcN < N (src < p): dst = src zero-extended
-      L(smallL)
-      mov(rdx, ptr(rsp))
-      zeroL = [Label() for i in range(N)]
-      for i in range(N - 1):
-        cmp(n, i)
-        je(zeroL[i])
-        mov(rax, ptr(px + i * 8))
-        mov(ptr(rdx + i * 8), rax)
-      jmp(zeroL[N - 1])
-      for i in range(N):
-        L(zeroL[i])
-        mov(qword(rdx + i * 8), 0)
-      L(exitL)
-      mov(eax, 1)
-    L(ret0L)
-    xor_(eax, eax)
-    ret()
 
 def getFrameRegs(pNum, tNum):
   regs = []
@@ -1301,7 +1172,7 @@ def main():
   parser.add_argument('-fp2_mul', action='store_true', default=False, help='add Fp2 mul function (Karatsuba + Montgomery reduction)')
   parser.add_argument('-fp2_sqr', action='store_true', default=False, help='add Fp2 sqr function (2 fused Montgomery mul)')
   parser.add_argument('-modp2', action='store_true', default=False, help='add modp2 function (z[N] = x[8] mod p, word-serial Barrett, N <= 6)')
-  parser.add_argument('-modp3', action='store_true', default=False, help='add modp3 function (variable-length modp2: dst[N] = src[srcN] mod p for srcN <= 8, constants from the parameter block, N <= 6)')
+  parser.add_argument('-modp3', action='store_true', default=False, help='add modp3 function (variable-length modp2 from mcl/src/gen_bint_x64.py: dst[N] = src[srcN] mod p for srcN <= 8, constants from the parameter block, N <= 6)')
   opt = parser.parse_args()
 
   init(opt)
@@ -1367,7 +1238,8 @@ def main():
   if opt.modp2 and not mont.isFullBit:
     gen_modp2(f'{opt.pre}modp2', mont)
   if opt.modp3 and not mont.isFullBit:
-    gen_modp3(f'{opt.pre}modp3', N=mont.pn)
+    # the same code as mclb_modp{256,384}_x64 of mcl (the name is the only difference)
+    gen_bint_x64.gen_modp_x64(f'{opt.pre}modp3', 8, mont.pn)
 
   term()
 

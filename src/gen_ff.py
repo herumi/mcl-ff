@@ -484,13 +484,38 @@ def gen_fp2_sqr(name, mont, mulF, dataVar, offset):
     call(mulF, pz, pt2, pt3)
     ret(Void)
 
-# z[N] = x[xN] mod p by word-serial Barrett reduction with a two-word
-# reciprocal (common.emit_modp2). The p-dependent constants (Qt = Q 2^s,
+# emit pz[N] = px[xN] mod p (fixed xN) into the current function by
+# word-serial Barrett reduction with a two-word reciprocal (common.modp_step).
+# pparam points to the parameter block of p (common.modp_param).
+# This fixed-length version is kept here only for the benchmark against the
+# variable-length common.emit_modp that mcl ships (moved from mcl/src/common.py
+# on 2026-09-08).
+def emit_modp2(N, xN, pz, px, pparam, mulPv):
+  assert xN >= N
+  bu = N * unit + unit
+  consts = common.modp_consts(unit, N, pparam)
+  # r = top N-1 units of x (< p)
+  if N == 1:
+    r = None
+  else:
+    r = loadN(px, N - 1, xN - (N - 1))
+  for k in range(xN - N, -1, -1):
+    w = load(getelementptr(px, k))
+    if r is None:
+      xx = zext(w, bu)
+    else:
+      xx = pack([w, r])
+      if xx.bit < bu:  # first step: r has N-1 units
+        xx = zext(xx, bu)
+    r = common.modp_step(unit, N, xx, consts, mulPv)
+  storeN(r, pz)
+
+# z[N] = x[xN] mod p (emit_modp2). The p-dependent constants (Qt = Q 2^s,
 # np = 2^bit - p) live in the global {name}_param; it is a non-constant
 # external global like the p global so that LLVM keeps loading them (the
 # function is then the same code for every p with the same N, which is what
-# mcl would ship). Make it internal+const to let LLVM fold them into
-# immediates instead.
+# mcl ships as mclb_modp{256,384}). Make it internal+const to let LLVM fold
+# them into immediates instead.
 def gen_modp2(name, mont, mulUnit, xN, paramVar):
   N = mont.pn
   resetGlobalIdx()
@@ -498,87 +523,15 @@ def gen_modp2(name, mont, mulUnit, xN, paramVar):
   px = IntPtr(unit)
   with Function(name, Void, pz, px) as f:
     pparam = bitcast(paramVar, unit)
-    common.emit_modp2(unit, N, xN, pz, px, pparam, mulUnit)
+    emit_modp2(N, xN, pz, px, pparam, mulUnit)
     ret(Void)
   return f
 
-# uint32_t modp3(Unit *dst, const Unit *src, size_t srcN, const Modp2 *para):
-# returns 0 if srcN * sizeof(Unit) > 64 (src wider than 512 bits); otherwise
-# dst[N] = src[srcN] mod p and returns 1 (the units of dst above src are
-# zero when srcN < N). Variable-length version of modp2 with the parameter
-# block passed as an argument (the same layout as {pre}modp2_param).
-# The xN - N + 1 steps of common.modp2_step are unrolled as in modp2, each
-# followed by an exit test (srcN == N + j), so srcN - N + 1 steps run and
-# the results of the exits meet in a phi; the input pointer is the same
-# run-time src + (srcN - N - j) as modp2's constant offsets.
-# srcN < N means src < p (since 64(N-1) < L), so dst is src zero-extended:
-# a compare/store chain copies src[i] for i < srcN, then zero-fills the rest.
-# srcN is i{unit} (size_t of the target where the unit is used).
+# uint32_t modp3(Unit *dst, const Unit *src, size_t srcN, const Modp *para):
+# the variable-length modp of mcl (common.gen_modp = mclb_modp{256,384} in
+# mcl/src/gen.py) under the bench name; para has the layout of {pre}modp2_param.
 def gen_modp3(name, mont, mulUnit, xN):
-  N = mont.pn
-  bu = N * unit + unit
-  resetGlobalIdx()
-  pz = IntPtr(unit)
-  px = IntPtr(unit)
-  srcN = Int(unit)
-  pparam = IntPtr(unit, const=True)
-  with Function(name, Int(32), pz, px, srcN, pparam) as f:
-    ret0L = Label()
-    okL = Label()
-    bigL = Label()
-    smallL = Label()
-    doneL = Label()
-    br(icmp(ugt, srcN, xN), ret0L, okL)
-    L(ret0L)
-    ret(Imm(0, 32))
-    L(okL)
-    br(icmp(ult, srcN, N), smallL, bigL)
-    L(bigL)
-    consts = common.modp2_consts(unit, N, pparam)
-    # r = top N-1 units of src (< p), k = srcN - N = index of the next unit
-    if N == 1:
-      r = None
-    else:
-      r = loadN(getelementptr(px, sub(srcN, N - 1)), N - 1)
-    pk = getelementptr(px, sub(srcN, N))
-    curL = bigL
-    exits = []
-    for j in range(xN - N + 1):
-      w = load(pk)
-      if r is None:
-        xx = zext(w, bu)
-      else:
-        xx = pack([w, r])
-        if xx.bit < bu:  # first step: r has N-1 units
-          xx = zext(xx, bu)
-      r = common.modp2_step(unit, N, xx, consts, mulUnit)
-      exits.append((r, curL))
-      if j < xN - N:
-        nextL = Label()
-        br(icmp(eq, srcN, N + j), doneL, nextL)
-        L(nextL)
-        curL = nextL
-        pk = getelementptr(pk, Imm(-1, unit))
-    br(doneL)
-    L(doneL)
-    storeN(phi(*exits), pz)
-    ret(Imm(1, 32))
-    # dst = src zero-extended
-    L(smallL)
-    zeroL = [Label() for i in range(N)]
-    for i in range(N - 1):
-      nextL = Label()
-      br(icmp(eq, srcN, i), zeroL[i], nextL)
-      L(nextL)
-      store(load(getelementptr(px, i)), getelementptr(pz, i))
-    br(zeroL[N - 1])
-    for i in range(N):
-      L(zeroL[i])
-      store(Imm(0, unit), getelementptr(pz, i))
-      if i < N - 1:
-        br(zeroL[i + 1])
-    ret(Imm(1, 32))
-  return f
+  return common.gen_modp(name, unit, mont.pn, xN, mulUnit)
 
 def gen_get_prime(name, pStr):
   resetGlobalIdx()
@@ -708,7 +661,7 @@ def main():
   if opt.modp2:
     # the parameter block (Qt, np) of modp2; modp3 takes the
     # same block as an argument, so the bench passes this global to it
-    param = common.modp2_param(mont.p, unit, mont.pn)
+    param = common.modp_param(mont.p, unit, mont.pn)
     paramVar = makeVar(f'{opt.pre}modp2_param', unit, param, const=False, static=False)
     gen_modp2(f'{opt.pre}modp2', mont, mulUnit, opt.modp2_bit // unit, paramVar)
   if opt.modp3:
