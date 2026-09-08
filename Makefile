@@ -53,12 +53,12 @@ BENCH_X64_OBJ=obj/bench_x64.o
 else
 # and-mask sub reduction: faster than the {0,p} table on aarch64
 SUB_OPT=-sub_mask
-GEN_OPT=-add -sub -mul $(SUB_OPT)
+GEN_OPT=-add -sub -mul -modp2 -modp3 $(SUB_OPT)
 endif
 
 ifeq ($(ARCH),x86_64)
 $(X64_ASM): src/gen_ff_x64.py $(GEN_STAMP)
-	$(PYTHON) $< -m gas > $@ -type $(TYPE) -mul
+	$(PYTHON) $< -m gas > $@ -type $(TYPE) -mul -modp2 -modp3
 obj/$(NAME)_x64.o: $(X64_ASM)
 	$(CXX) -c -o $@ $< -fPIC
 MCL_FF_OBJ+=obj/$(NAME)_x64.o
@@ -105,12 +105,12 @@ test: $(BENCH_EXE)
 # (x64 asm) under distinct prefixes and compare them within a single executable
 # (test/bench.cpp).
 src/bench_llvm.ll: src/gen_ff.py src/s_xbyak_llvm.py $(COMMON_PY) $(GEN_STAMP)
-	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul -mul128 -sqr -mod -mod128 -mulPre -sqrPre -fp2_mul -fp2_sqr $(SUB_OPT) > $@
+	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul -mul128 -sqr -mod -mod128 -mulPre -sqrPre -fp2_mul -fp2_sqr -modp2 -modp3 $(SUB_OPT) > $@
 obj/bench_llvm.o: src/bench_llvm.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
 ifeq ($(ARCH),x86_64)
 src/bench_x64.S: src/gen_ff_x64.py $(GEN_STAMP)
-	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul -mul_wo_adx -sqr -mulPre -mulPre_wo_adx -mod -mod128 -sqrPre -fp2_mul -fp2_sqr > $@
+	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul -mul_wo_adx -sqr -mulPre -mulPre_wo_adx -mod -mod128 -sqrPre -fp2_mul -fp2_sqr -modp2 -modp3 > $@
 $(BENCH_X64_OBJ): src/bench_x64.S
 	$(CXX) -c -o $@ $< -fPIC
 endif

@@ -484,6 +484,102 @@ def gen_fp2_sqr(name, mont, mulF, dataVar, offset):
     call(mulF, pz, pt2, pt3)
     ret(Void)
 
+# z[N] = x[xN] mod p by word-serial Barrett reduction with a two-word
+# reciprocal (common.emit_modp2). The p-dependent constants (Qt = Q 2^s,
+# np = 2^bit - p) live in the global {name}_param; it is a non-constant
+# external global like the p global so that LLVM keeps loading them (the
+# function is then the same code for every p with the same N, which is what
+# mcl would ship). Make it internal+const to let LLVM fold them into
+# immediates instead.
+def gen_modp2(name, mont, mulUnit, xN, paramVar):
+  N = mont.pn
+  resetGlobalIdx()
+  pz = IntPtr(unit)
+  px = IntPtr(unit)
+  with Function(name, Void, pz, px) as f:
+    pparam = bitcast(paramVar, unit)
+    common.emit_modp2(unit, N, xN, pz, px, pparam, mulUnit)
+    ret(Void)
+  return f
+
+# uint32_t modp3(Unit *dst, const Unit *src, size_t srcN, const Modp2 *para):
+# returns 0 if srcN * sizeof(Unit) > 64 (src wider than 512 bits); otherwise
+# dst[N] = src[srcN] mod p and returns 1 (the units of dst above src are
+# zero when srcN < N). Variable-length version of modp2 with the parameter
+# block passed as an argument (the same layout as {pre}modp2_param).
+# The xN - N + 1 steps of common.modp2_step are unrolled as in modp2, each
+# followed by an exit test (srcN == N + j), so srcN - N + 1 steps run and
+# the results of the exits meet in a phi; the input pointer is the same
+# run-time src + (srcN - N - j) as modp2's constant offsets.
+# srcN < N means src < p (since 64(N-1) < L), so dst is src zero-extended:
+# a compare/store chain copies src[i] for i < srcN, then zero-fills the rest.
+# srcN is i{unit} (size_t of the target where the unit is used).
+def gen_modp3(name, mont, mulUnit, xN):
+  N = mont.pn
+  bu = N * unit + unit
+  resetGlobalIdx()
+  pz = IntPtr(unit)
+  px = IntPtr(unit)
+  srcN = Int(unit)
+  pparam = IntPtr(unit, const=True)
+  with Function(name, Int(32), pz, px, srcN, pparam) as f:
+    ret0L = Label()
+    okL = Label()
+    bigL = Label()
+    smallL = Label()
+    doneL = Label()
+    br(icmp(ugt, srcN, xN), ret0L, okL)
+    L(ret0L)
+    ret(Imm(0, 32))
+    L(okL)
+    br(icmp(ult, srcN, N), smallL, bigL)
+    L(bigL)
+    consts = common.modp2_consts(unit, N, pparam)
+    # r = top N-1 units of src (< p), k = srcN - N = index of the next unit
+    if N == 1:
+      r = None
+    else:
+      r = loadN(getelementptr(px, sub(srcN, N - 1)), N - 1)
+    pk = getelementptr(px, sub(srcN, N))
+    curL = bigL
+    exits = []
+    for j in range(xN - N + 1):
+      w = load(pk)
+      if r is None:
+        xx = zext(w, bu)
+      else:
+        xx = pack([w, r])
+        if xx.bit < bu:  # first step: r has N-1 units
+          xx = zext(xx, bu)
+      r = common.modp2_step(unit, N, xx, consts, mulUnit)
+      exits.append((r, curL))
+      if j < xN - N:
+        nextL = Label()
+        br(icmp(eq, srcN, N + j), doneL, nextL)
+        L(nextL)
+        curL = nextL
+        pk = getelementptr(pk, Imm(-1, unit))
+    br(doneL)
+    L(doneL)
+    storeN(phi(*exits), pz)
+    ret(Imm(1, 32))
+    # dst = src zero-extended
+    L(smallL)
+    zeroL = [Label() for i in range(N)]
+    for i in range(N - 1):
+      nextL = Label()
+      br(icmp(eq, srcN, i), zeroL[i], nextL)
+      L(nextL)
+      store(load(getelementptr(px, i)), getelementptr(pz, i))
+    br(zeroL[N - 1])
+    for i in range(N):
+      L(zeroL[i])
+      store(Imm(0, unit), getelementptr(pz, i))
+      if i < N - 1:
+        br(zeroL[i + 1])
+    ret(Imm(1, 32))
+  return f
+
 def gen_get_prime(name, pStr):
   resetGlobalIdx()
   r = IntPtr(8, const=True)
@@ -514,6 +610,9 @@ def main():
   parser.add_argument('-sqrPreWide', action='store_true', default=False, help='add sqrPreWide function (sqrPre by a single wide LLVM mul, for bench)')
   parser.add_argument('-fp2_mul', action='store_true', default=False, help='add Fp2 mul function (Karatsuba + Montgomery reduction)')
   parser.add_argument('-fp2_sqr', action='store_true', default=False, help='add Fp2 sqr function (2 fused Montgomery mul)')
+  parser.add_argument('-modp2', action='store_true', default=False, help='add modp2 function (z[N] = x[modp2_bit/unit] mod p, word-serial Barrett)')
+  parser.add_argument('-modp2_bit', type=int, default=512, help='input bit size of modp2 (default 512)')
+  parser.add_argument('-modp3', action='store_true', default=False, help='add modp3 function (variable-length modp2: dst[N] = src[srcN] mod p for srcN <= modp2_bit/unit, parameter block as an argument)')
 
   opt = parser.parse_args()
   if opt.n == 0:
@@ -552,6 +651,8 @@ def main():
     opt.sqrPre = True
     opt.fp2_mul = True
     opt.fp2_sqr = True
+    opt.modp2 = True
+    opt.modp3 = True
     showPrototype()
 
   dataVar = makeVar(opt.pName, mont.bit, mont.p, const=False, static=False)
@@ -604,6 +705,14 @@ def main():
   nocarry = (mont.p >> (unit * mont.pn - 2)) == 0
   if opt.fp2_sqr and not mont.isFullBit and nocarry:
     gen_fp2_sqr(f'{opt.pre2}sqr', mont, mulF, dataVar, opt.offset)
+  if opt.modp2:
+    # the parameter block (Qt, np) of modp2; modp3 takes the
+    # same block as an argument, so the bench passes this global to it
+    param = common.modp2_param(mont.p, unit, mont.pn)
+    paramVar = makeVar(f'{opt.pre}modp2_param', unit, param, const=False, static=False)
+    gen_modp2(f'{opt.pre}modp2', mont, mulUnit, opt.modp2_bit // unit, paramVar)
+  if opt.modp3:
+    gen_modp3(f'{opt.pre}modp3', mont, mulUnit, opt.modp2_bit // unit)
 
   term()
 
