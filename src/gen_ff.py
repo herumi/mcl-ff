@@ -1,17 +1,16 @@
 import os
 import sys
 import argparse
+# s_xbyak_llvm.py (the LLVM-IR DSL) and common.py (helpers shared with gen.py /
+# gen_bint.py: gen_mulUU / gen_mulPos / gen_mulPv / emit_mulPre / emit_fp_add /
+# emit_fp_sub_raw / emit_mont / emit_montRed / split) live in mcl: $MCL_DIR/src,
+# default ../mcl relative to this repository. This repository has no copy of
+# the DSL (removed 2026-09-14).
+mclDir = os.environ.get('MCL_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'mcl'))
+sys.path.append(os.path.join(mclDir, 'src'))
 from s_xbyak_llvm import *
 from mont import *
 from primetbl import *
-# common.py (helpers shared with gen.py / gen_bint.py: gen_mulUU / gen_mulPos /
-# gen_mulPv / emit_mulPre / emit_fp_add / emit_fp_sub_raw / emit_mont /
-# emit_montRed / split) lives in mcl: $MCL_DIR/src, default ../mcl relative to
-# this repository.
-# append (not insert) so that s_xbyak_llvm.py of this repository is imported
-# first and common.py shares that module instance.
-mclDir = os.environ.get('MCL_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'mcl'))
-sys.path.append(os.path.join(mclDir, 'src'))
 import common
 
 unit = 0

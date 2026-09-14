@@ -5,11 +5,13 @@ ifneq ($(findstring clang,$(CXX)),)
   CLANG=$(CXX)
 endif
 MCL_DIR?=../mcl
-# gen_ff.py imports $(MCL_DIR)/src/common.py
+# gen_ff.py imports $(MCL_DIR)/src/{s_xbyak_llvm,common}.py
 export MCL_DIR
 COMMON_PY=$(MCL_DIR)/src/common.py
-# gen_ff_x64.py imports $(MCL_DIR)/src/gen_bint_x64.py (x64 modp)
+S_XBYAK_LLVM_PY=$(MCL_DIR)/src/s_xbyak_llvm.py
+# gen_ff_x64.py imports $(MCL_DIR)/src/{s_xbyak,gen_bint_x64}.py (x64 modp)
 GEN_BINT_X64_PY=$(MCL_DIR)/src/gen_bint_x64.py
+S_XBYAK_PY=$(MCL_DIR)/src/s_xbyak.py
 MCL_LIB=-lmcl -L $(MCL_DIR)/lib
 ARCH?=$(shell uname -m)
 
@@ -59,7 +61,7 @@ GEN_OPT=-add -sub -mul -modp2 -modp3 $(SUB_OPT)
 endif
 
 ifeq ($(ARCH),x86_64)
-$(X64_ASM): src/gen_ff_x64.py $(GEN_BINT_X64_PY) $(GEN_STAMP)
+$(X64_ASM): src/gen_ff_x64.py $(S_XBYAK_PY) $(GEN_BINT_X64_PY) $(GEN_STAMP)
 	$(PYTHON) $< -m gas > $@ -type $(TYPE) -mul -modp2 -modp3
 obj/$(NAME)_x64.o: $(X64_ASM)
 	$(CXX) -c -o $@ $< -fPIC
@@ -87,7 +89,7 @@ bin/%.exe: obj/%.o $(MCL_FF_OBJ) $(HEADER)
 
 all: $(TARGET)
 
-$(LL): src/gen_ff.py Makefile src/s_xbyak_llvm.py $(COMMON_PY) $(GEN_STAMP)
+$(LL): src/gen_ff.py Makefile $(S_XBYAK_LLVM_PY) $(COMMON_PY) $(GEN_STAMP)
 	$(PYTHON) $< -u $(BIT) -type $(TYPE) -pre $(PRE) $(GEN_OPT) > $@
 
 obj/$(NAME).o: $(LL)
@@ -106,12 +108,12 @@ test: $(BENCH_EXE)
 # Generate add/sub/mul from gen_ff.py (LLVM) and, on x86_64, gen_ff_x64.py
 # (x64 asm) under distinct prefixes and compare them within a single executable
 # (test/bench.cpp).
-src/bench_llvm.ll: src/gen_ff.py src/s_xbyak_llvm.py $(COMMON_PY) $(GEN_STAMP)
+src/bench_llvm.ll: src/gen_ff.py $(S_XBYAK_LLVM_PY) $(COMMON_PY) $(GEN_STAMP)
 	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul -mul128 -sqr -mod -mod128 -mulPre -sqrPre -fp2_mul -fp2_sqr -modp2 -modp3 -invMod -inv_helpers $(SUB_OPT) > $@
 obj/bench_llvm.o: src/bench_llvm.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
 ifeq ($(ARCH),x86_64)
-src/bench_x64.S: src/gen_ff_x64.py $(GEN_BINT_X64_PY) $(GEN_STAMP)
+src/bench_x64.S: src/gen_ff_x64.py $(S_XBYAK_PY) $(GEN_BINT_X64_PY) $(GEN_STAMP)
 	$(PYTHON) src/gen_ff_x64.py -m gas -type $(TYPE) -pre x64_ -add -sub -mul -mul_wo_adx -sqr -mulPre -mulPre_wo_adx -mod -mod128 -sqrPre -fp2_mul -fp2_sqr -modp2 -modp3 > $@
 $(BENCH_X64_OBJ): src/bench_x64.S
 	$(CXX) -c -o $@ $< -fPIC
@@ -125,13 +127,13 @@ endif
 # into one executable without renaming.
 MULPRE_N=2 3 4 5 6 7 8
 MULPRE_OBJ=$(foreach n,$(MULPRE_N),obj/mulPre_llvm_n$(n).o)
-src/mulPre_llvm_n%.ll: src/gen_ff.py src/s_xbyak_llvm.py $(COMMON_PY) Makefile
+src/mulPre_llvm_n%.ll: src/gen_ff.py $(S_XBYAK_LLVM_PY) $(COMMON_PY) Makefile
 	$(PYTHON) src/gen_ff.py -u 64 -p `$(PYTHON) -c "print(hex((1<<(64*$*-1))+1))"` -pre llvm_n$*_ -mulPre -mulPreWide -sqrPre -sqrPreWide > $@
 obj/mulPre_llvm_n%.o: src/mulPre_llvm_n%.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
 ifeq ($(ARCH),x86_64)
 MULPRE_OBJ+=$(foreach n,$(MULPRE_N),obj/mulPre_x64_n$(n).o)
-src/mulPre_x64_n%.S: src/gen_ff_x64.py src/s_xbyak.py Makefile
+src/mulPre_x64_n%.S: src/gen_ff_x64.py $(S_XBYAK_PY) Makefile
 	$(PYTHON) src/gen_ff_x64.py -m gas -p `$(PYTHON) -c "print(hex((1<<(64*$*-1))+1))"` -pre x64_n$*_ -mulPre $(if $(filter $*,4 6),-sqrPre) > $@
 obj/mulPre_x64_n%.o: src/mulPre_x64_n%.S
 	$(CXX) -c -o $@ $< -fPIC
@@ -172,11 +174,7 @@ a64asm: $(LL)
 
 -include $(DEPEND_FILE)
 
-# s_xbyak.py and s_xbyak_llvm.py are maintained in ../s_xbyak (as in mcl)
-update_s_xbyak:
-	cp -a ../s_xbyak/s_xbyak.py ../s_xbyak/s_xbyak_llvm.py src/
-
-.PHONY: clean bench update_s_xbyak invmod_test
+.PHONY: clean bench invmod_test
 
 clean:
 	rm -rf src/*.s src/*.S src/*.ll obj/*.o obj/*.d $(HEADER) bin/*.exe

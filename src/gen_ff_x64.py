@@ -1,16 +1,15 @@
 import sys
+import argparse
+import os
+# s_xbyak.py (the x64 asm DSL) and the x64 modp generator (gen_bint_x64.py:
+# gen_modp_x64: dst[N] = src[srcN] mod p with the parameter block of
+# mcl::Modp) live in mcl: $MCL_DIR/src, default ../mcl relative to this
+# repository. This repository has no copy of the DSL (removed 2026-09-14).
+mclDir = os.environ.get('MCL_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'mcl'))
+sys.path.append(os.path.join(mclDir, 'src'))
 from s_xbyak import *
 from primetbl import *
 from mont import *
-import argparse
-import os
-# the x64 modp generator (gen_modp_x64: dst[N] = src[srcN] mod p with the
-# parameter block of mcl::Modp) lives in mcl: $MCL_DIR/src/gen_bint_x64.py,
-# default ../mcl relative to this repository. append (not insert) so that
-# s_xbyak.py of this repository is imported first and gen_bint_x64.py shares
-# that module instance (the two copies are identical).
-mclDir = os.environ.get('MCL_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'mcl'))
-sys.path.append(os.path.join(mclDir, 'src'))
 import gen_bint_x64
 
 SIMD_BYTE = 64
