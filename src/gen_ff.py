@@ -636,13 +636,15 @@ def main():
     mulF = gen_mul(f'{opt.pre}mul', mont, dataVar, mulUnit)
   if opt.sqr:
     gen_sqr(f'{opt.pre}sqr', mont, dataVar, mulUnit, mulF)
+  mul128F = None
   if opt.mul128 and mont.pn % 2 == 0 and not mont.isFullBit:
-    gen_mul128(f'{opt.pre}mul128', mont, dataVar, mulUnit)
+    mul128F = gen_mul128(f'{opt.pre}mul128', mont, dataVar, mulUnit)
   modF = None
   if opt.mod:
     modF = gen_mod(f'{opt.pre}mod', mont, dataVar, mulUnit)
+  mod128F = None
   if opt.mod128 and mont.pn % 2 == 0 and not mont.isFullBit:
-    gen_mod128(f'{opt.pre}mod128', mont, dataVar, mulUnit)
+    mod128F = gen_mod128(f'{opt.pre}mod128', mont, dataVar, mulUnit)
   mulPreF = None
   if opt.mulPre:
     mulPreF = gen_mulPre(f'{opt.pre}mulPre', mont.pn, mulUnit)
@@ -654,10 +656,17 @@ def main():
     gen_sqrPreWide(f'{opt.pre}sqrPreWide', mont.pn)
   if opt.fp2_mul and not mont.isFullBit:
     gen_fp2_mul(f'{opt.pre2}mul', mont, mulPreF, modF, subTbl, opt.offset)
+    # radix-2^128 reduction variant; both mods share R = 2^(unit N), so the
+    # Montgomery representation is identical and the variants can be mixed
+    if mod128F:
+      gen_fp2_mul(f'{opt.pre2}mul128', mont, mulPreF, mod128F, subTbl, opt.offset)
   # p < R/4 so that the fused mul accepts operands < 2p
   nocarry = (mont.p >> (unit * mont.pn - 2)) == 0
   if opt.fp2_sqr and not mont.isFullBit and nocarry:
     gen_fp2_sqr(f'{opt.pre2}sqr', mont, mulF, dataVar, opt.offset)
+    # radix-2^128 fused-mul variant (see gen_fp2_mul above)
+    if mul128F:
+      gen_fp2_sqr(f'{opt.pre2}sqr128', mont, mul128F, dataVar, opt.offset)
   if opt.modp2:
     # the parameter block (Qt, np) of modp2; modp3 takes the
     # same block as an argument, so the bench passes this global to it

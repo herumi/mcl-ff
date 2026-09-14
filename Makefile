@@ -72,7 +72,7 @@ endif
 # the nocarry condition (e.g. BLS12-381-r) still link (bench.cpp skips it).
 # Likewise llvm_mod128 (generated only for even N and non-full-bit p).
 ifeq ($(shell uname -s),Darwin)
-BENCH_LDFLAGS=-Wl,-U,_llvm2_sqr -Wl,-U,_llvm_mod128 -Wl,-U,_llvm_mul128
+BENCH_LDFLAGS=-Wl,-U,_llvm2_sqr -Wl,-U,_llvm_mod128 -Wl,-U,_llvm_mul128 -Wl,-U,_llvm2_mul128 -Wl,-U,_llvm2_sqr128
 endif
 
 ifeq ($(DEBUG),1)
