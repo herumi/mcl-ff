@@ -107,7 +107,7 @@ test: $(BENCH_EXE)
 # (x64 asm) under distinct prefixes and compare them within a single executable
 # (test/bench.cpp).
 src/bench_llvm.ll: src/gen_ff.py src/s_xbyak_llvm.py $(COMMON_PY) $(GEN_STAMP)
-	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul -mul128 -sqr -mod -mod128 -mulPre -sqrPre -fp2_mul -fp2_sqr -modp2 -modp3 $(SUB_OPT) > $@
+	$(PYTHON) src/gen_ff.py -u 64 -type $(TYPE) -pre llvm_ -add -sub -mul -mul128 -sqr -mod -mod128 -mulPre -sqrPre -fp2_mul -fp2_sqr -modp2 -modp3 -invMod -inv_helpers $(SUB_OPT) > $@
 obj/bench_llvm.o: src/bench_llvm.ll
 	$(CLANG) -c -o $@ $< $(CFLAGS) -mllvm -mul-constant-optimization=false
 ifeq ($(ARCH),x86_64)
@@ -143,6 +143,14 @@ $(BENCH_EXE): test/bench.cpp obj/bench_llvm.o $(BENCH_X64_OBJ) $(MULPRE_OBJ) $(H
 bench: $(BENCH_EXE)
 	$(BENCH_EXE)
 
+# test and benchmark of the safegcd inverse (C++ twos / signed62 / LLVM);
+# see misc/invmod_test.cpp
+INVMOD_EXE=bin/invmod_test.exe
+$(INVMOD_EXE): misc/invmod_test.cpp obj/bench_llvm.o $(HEADER)
+	$(CXX) -o $@ $< obj/bench_llvm.o $(CFLAGS) $(MCL_LIB)
+invmod_test: $(INVMOD_EXE)
+	$(INVMOD_EXE)
+
 # secp256k1-p/r are excluded because they do not support non-montgomery
 TYPE_TBL=BLS12-381-p BLS12-381-r BN254-p BN254-r
 
@@ -168,7 +176,7 @@ a64asm: $(LL)
 update_s_xbyak:
 	cp -a ../s_xbyak/s_xbyak.py ../s_xbyak/s_xbyak_llvm.py src/
 
-.PHONY: clean bench update_s_xbyak
+.PHONY: clean bench update_s_xbyak invmod_test
 
 clean:
 	rm -rf src/*.s src/*.S src/*.ll obj/*.o obj/*.d $(HEADER) bin/*.exe

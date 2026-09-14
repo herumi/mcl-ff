@@ -533,6 +533,266 @@ def gen_modp2(name, mont, mulUnit, xN, paramVar):
 def gen_modp3(name, mont, mulUnit, xN):
   return common.gen_modp(name, unit, mont.pn, xN, mulUnit)
 
+# ---- invMod (non constant time safegcd, mcl/include/mcl/invmod.hpp) ----
+# The LLVM version of the two's complement safegcd (the former
+# mcl::inv::twos::exec<N, W>, now kept as the C++ reference in
+# misc/invmod_test.cpp; mcl::inv itself is the signed62/signed30 version since
+# 2026-09-14): f, g, d, e are W-unit two's complement values (W = N if
+# p < 2^(unit N - 2) (the nocarry condition) so that -2p < d, e < p fits,
+# otherwise N + 1), the helpers
+# (divsteps / update_fg / update_de) are separate functions called from invMod
+# as in the C++ version, and the state lives in allocas (promoted to registers
+# after inlining). divsteps uses the 8-bit table (-f^-1 mod 256) of
+# secp256k1_modinv64_divsteps_62_var as invmod.hpp does.
+
+inv_modL = 0  # unit - 2
+
+# mask (all ones if x < 0) of a signed unit x
+def inv_signMask(x):
+  return ashr(x, unit - 1)
+
+# z[W+1] = x[W] * a + y[W] * b for two's complement x, y (loaded from px, py)
+# and signed units a, b. mulUnit gives the unsigned product x_u a_u (W+1 units);
+# x a = x_u a_u - [x<0] (a_u << W unit) - [a<0] (x_u << unit) mod 2^((W+1) unit).
+def emit_inv_mulAdd2(W, px, a, py, b, mulUnit, xNonNeg=False):
+  bit = W * unit
+  bu = bit + unit
+  z = add(call(mulUnit, px, a), call(mulUnit, py, b))
+  x = loadN(px, W)
+  y = loadN(py, W)
+  zero = Imm(0, unit)
+  if xNonNeg:
+    top = select(icmp(slt, y, Imm(0, bit)), b, zero)
+  else:
+    top = add(select(icmp(slt, x, Imm(0, bit)), a, zero), select(icmp(slt, y, Imm(0, bit)), b, zero))
+  z = sub(z, shl(zext(top, bu), bit))
+  c = add(and_(x, sext(inv_signMask(a), bit)), and_(y, sext(inv_signMask(b), bit)))
+  z = sub(z, shl(zext(c, bu), unit))
+  return z
+
+# y[W] = x[W+1] >> modL (the result fits in W units, so lshr + trunc suffices)
+def emit_inv_shr(W, x):
+  return trunc(lshr(x, inv_modL), W * unit)
+
+# Unit divsteps(Unit *t, Unit eta, Unit f, Unit g) : divsteps_n_matrix
+# useBranch : the eta < 0 swap by a branch instead of selects
+def gen_inv_divsteps(name, tbl, cttz, useBranch, private):
+  resetGlobalIdx()
+  pt = IntPtr(unit)
+  eta = Int(unit)
+  f = Int(unit)
+  g = Int(unit)
+  with Function(name, Int(unit), pt, eta, f, g, private=private, alwaysinline=True) as func:
+    entryL = Label()
+    loopL = Label()
+    contL = Label()
+    exitL = Label()
+    zero = Imm(0, unit)
+    one = Imm(1, unit)
+    L(entryL)
+    br(loopL)
+    L(loopL)
+    etaP = phi((eta, entryL))
+    iP = phi((Imm(inv_modL, unit), entryL))
+    fP = phi((f, entryL))
+    gP = phi((g, entryL))
+    uP = phi((one, entryL))
+    vP = phi((zero, entryL))
+    qP = phi((zero, entryL))
+    rP = phi((one, entryL))
+    # zeros = min(i, bsf(g)) (i if g == 0): bit i of g | (~0 << i) is set
+    zeros = call(cttz, or_(gP, shl(Imm(-1, unit), iP)), Imm(1, 1))
+    eta1 = sub(etaP, zeros)
+    i1 = sub(iP, zeros)
+    g1 = lshr(gP, zeros)
+    u1 = shl(uP, zeros)
+    v1 = shl(vP, zeros)
+    br(icmp(eq, i1, zero), exitL, contL)
+    L(contL)
+    neg = icmp(slt, eta1, zero)
+    if useBranch:
+      swapL = Label()
+      joinL = Label()
+      br(neg, swapL, joinL)
+      L(swapL)
+      etaN = sub(zero, eta1)
+      gN = sub(zero, fP)
+      qN = sub(zero, u1)
+      rN = sub(zero, v1)
+      br(joinL)
+      L(joinL)
+      eta2 = phi((eta1, contL), (etaN, swapL))
+      f2 = phi((fP, contL), (g1, swapL))
+      g2 = phi((g1, contL), (gN, swapL))
+      u2 = phi((u1, contL), (qP, swapL))
+      v2 = phi((v1, contL), (rP, swapL))
+      q2 = phi((qP, contL), (qN, swapL))
+      r2 = phi((rP, contL), (rN, swapL))
+      tailL = joinL
+    else:
+      eta2 = select(neg, sub(zero, eta1), eta1)
+      f2 = select(neg, g1, fP)
+      g2 = select(neg, sub(zero, fP), g1)
+      u2 = select(neg, qP, u1)
+      v2 = select(neg, rP, v1)
+      q2 = select(neg, sub(zero, u1), qP)
+      r2 = select(neg, sub(zero, v1), rP)
+      tailL = contL
+    # limit = min(eta + 1, i) (1 <= limit <= modL), mask = the low min(limit, 8) bits
+    e1 = add(eta2, one)
+    limit = select(icmp(slt, e1, i1), e1, i1)
+    idx = lshr(and_(f2, 255), 1)
+    tv = zext(load(getelementptr(tbl, idx)), unit)
+    mask = and_(lshr(Imm(-1, unit), sub(Imm(unit, unit), limit)), 255)
+    w = and_(mul(g2, tv), mask)
+    g3 = add(g2, mul(w, f2))
+    q3 = add(q2, mul(w, u2))
+    r3 = add(r2, mul(w, v2))
+    br(loopL)
+    etaP.link(eta2, tailL)
+    iP.link(i1, tailL)
+    fP.link(f2, tailL)
+    gP.link(g3, tailL)
+    uP.link(u2, tailL)
+    vP.link(v2, tailL)
+    qP.link(q3, tailL)
+    rP.link(r3, tailL)
+    L(exitL)
+    store(u1, pt)
+    store(v1, getelementptr(pt, 1))
+    store(qP, getelementptr(pt, 2))
+    store(rP, getelementptr(pt, 3))
+    ret(eta1)
+  return func
+
+# void update_fg(Unit *f, Unit *g, const Unit *t) : f, g are W units
+def gen_inv_update_fg(name, W, mulUnit, private):
+  resetGlobalIdx()
+  pf = IntPtr(unit)
+  pg = IntPtr(unit)
+  pt = IntPtr(unit, const=True)
+  with Function(name, Void, pf, pg, pt, private=private, alwaysinline=True) as func:
+    u = load(pt)
+    v = load(getelementptr(pt, 1))
+    q = load(getelementptr(pt, 2))
+    r = load(getelementptr(pt, 3))
+    f1 = emit_inv_mulAdd2(W, pf, u, pg, v, mulUnit)
+    g1 = emit_inv_mulAdd2(W, pf, q, pg, r, mulUnit)
+    storeN(emit_inv_shr(W, f1), pf)
+    storeN(emit_inv_shr(W, g1), pg)
+    ret(Void)
+  return func
+
+# void update_de(Unit *d, Unit *e, const Unit *t, const Unit *im) : d, e are W units
+# im : the parameter block twos::Param<N> of misc/invmod_test.cpp (lowM, Mi, M[N+1] zero-extended)
+# sd = ud - ((Mi cd) mod 2^modL) as in invmod.hpp (-2M < d, e < M is kept)
+def gen_inv_update_de(name, W, mulUnit, private):
+  resetGlobalIdx()
+  bit = W * unit
+  pd = IntPtr(unit)
+  pe = IntPtr(unit)
+  pt = IntPtr(unit, const=True)
+  pim = IntPtr(unit, const=True)
+  with Function(name, Void, pd, pe, pt, pim, private=private, alwaysinline=True) as func:
+    u = load(pt)
+    v = load(getelementptr(pt, 1))
+    q = load(getelementptr(pt, 2))
+    r = load(getelementptr(pt, 3))
+    lowM = load(pim)
+    Mi = load(getelementptr(pim, 1))
+    pM = getelementptr(pim, 2)
+    md = inv_signMask(load(getelementptr(pd, W - 1)))
+    me = inv_signMask(load(getelementptr(pe, W - 1)))
+    ud = add(and_(u, md), and_(v, me))
+    ue = add(and_(q, md), and_(r, me))
+    d1 = emit_inv_mulAdd2(W, pd, u, pe, v, mulUnit)
+    e1 = emit_inv_mulAdd2(W, pd, q, pe, r, mulUnit)
+    di = add(trunc(d1, unit), mul(lowM, ud))
+    ei = add(trunc(e1, unit), mul(lowM, ue))
+    mask = Imm((1 << inv_modL) - 1, unit)
+    sd = sub(ud, and_(mul(Mi, di), mask))
+    se = sub(ue, and_(mul(Mi, ei), mask))
+    # d = (d1 + M * sd) >> modL
+    Mv = loadN(pM, W)
+    d1 = add(d1, sub(call(mulUnit, pM, sd), shl(zext(and_(Mv, sext(inv_signMask(sd), bit)), bit + unit), unit)))
+    e1 = add(e1, sub(call(mulUnit, pM, se), shl(zext(and_(Mv, sext(inv_signMask(se), bit)), bit + unit), unit)))
+    storeN(emit_inv_shr(W, d1), pd)
+    storeN(emit_inv_shr(W, e1), pe)
+    ret(Void)
+  return func
+
+# void invMod(Unit *y, const Unit *x, const Unit *im) : mcl::inv::twos::exec<N, W>
+def gen_invMod(name, N, W, divstepsF, updateFgF, updateDeF):
+  resetGlobalIdx()
+  bit = W * unit
+  py = IntPtr(unit)
+  px = IntPtr(unit, const=True)
+  pim = IntPtr(unit, const=True)
+  # y = x (in place) is allowed, so no noalias
+  with Function(name, Void, py, px, pim, noalias=False) as func:
+    pf = bitcast(alloca_(bit, 1), unit)
+    pg = bitcast(alloca_(bit, 1), unit)
+    pd = bitcast(alloca_(bit, 1), unit)
+    pe = bitcast(alloca_(bit, 1), unit)
+    pt = alloca_(unit, 4)
+    peta = alloca_(unit, 1)
+    pM = getelementptr(pim, 2)
+    storeN(loadN(pM, W), pf)
+    g = loadN(px, N)
+    if W > N:
+      g = zext(g, bit)
+    storeN(g, pg)
+    storeN(Imm(0, bit), pd)
+    storeN(Imm(1, bit), pe)
+    store(Imm(-1, unit), peta)
+    loopL = Label()
+    bodyL = Label()
+    doneL = Label()
+    br(loopL)
+    L(loopL)
+    g = loadN(pg, W)
+    br(icmp(eq, g, Imm(0, bit)), doneL, bodyL)
+    L(bodyL)
+    mask = Imm((1 << inv_modL) - 1, unit)
+    fLow = and_(load(pf), mask)
+    gLow = and_(load(pg), mask)
+    eta = call(divstepsF, pt, load(peta), fLow, gLow)
+    store(eta, peta)
+    call(updateFgF, pf, pg, pt)
+    call(updateDeF, pd, pe, pt, pim)
+    br(loopL)
+    L(doneL)
+    # normalize : d in (-2M, M) -> [0, M) (negated if f < 0)
+    M = loadN(pM, W)
+    zero = Imm(0, bit)
+    d = loadN(pd, W)
+    d = add(d, select(icmp(slt, d, zero), M, zero))
+    minus = icmp(slt, loadN(pf, W), zero)
+    d = select(minus, sub(zero, d), d)
+    d = add(d, select(icmp(slt, d, zero), M, zero))
+    if W > N:
+      d = trunc(d, N * unit)
+    storeN(d, py)
+    ret(Void)
+  return func
+
+# mulUnit : common.gen_mulPv for N units ; a W-unit one is generated if W > N
+def gen_invMod_all(pre, N, W, mulUnit, mulPos, extractHigh, exportHelpers):
+  global inv_modL
+  inv_modL = unit - 2
+  private = not exportHelpers
+  if W > N:
+    mulUnit = common.gen_mulPv(f'{pre}inv_mulUnit', unit, W, mulPos, extractHigh, private=True, alwaysinline=True)
+  # tbl[(f & 255) >> 1] = -f^-1 mod 256 for odd f (negInv256 of invmod.hpp)
+  tbl = makeVar(f'{pre}inv_tbl', 8, [(-pow(f, -1, 256)) % 256 for f in range(1, 256, 2)], static=True, const=True)
+  cttz = Function(f'llvm.cttz.i{unit}', Int(unit), Int(unit), Int(1))
+  declare(cttz)
+  updateFgF = gen_inv_update_fg(f'{pre}inv_update_fg', W, mulUnit, private)
+  updateDeF = gen_inv_update_de(f'{pre}inv_update_de', W, mulUnit, private)
+  for (suf, useBranch) in [('', False), ('_br', True)]:
+    divstepsF = gen_inv_divsteps(f'{pre}inv_divsteps{suf}', tbl, cttz, useBranch, private)
+    gen_invMod(f'{pre}invMod{suf}', N, W, divstepsF, updateFgF, updateDeF)
+
 def gen_get_prime(name, pStr):
   resetGlobalIdx()
   r = IntPtr(8, const=True)
@@ -566,6 +826,8 @@ def main():
   parser.add_argument('-modp2', action='store_true', default=False, help='add modp2 function (z[N] = x[modp2_bit/unit] mod p, word-serial Barrett)')
   parser.add_argument('-modp2_bit', type=int, default=512, help='input bit size of modp2 (default 512)')
   parser.add_argument('-modp3', action='store_true', default=False, help='add modp3 function (variable-length modp2: dst[N] = src[srcN] mod p for srcN <= modp2_bit/unit, parameter block as an argument)')
+  parser.add_argument('-invMod', action='store_true', default=False, help='add invMod (safegcd, the LLVM version of the two\'s complement exec<N, W> of misc/invmod_test.cpp) and invMod_br (divsteps swap by a branch) functions')
+  parser.add_argument('-inv_helpers', action='store_true', default=False, help='export the helpers of invMod (inv_divsteps, inv_update_fg, inv_update_de) for the bench tests')
 
   opt = parser.parse_args()
   if opt.n == 0:
@@ -606,6 +868,7 @@ def main():
     opt.fp2_sqr = True
     opt.modp2 = True
     opt.modp3 = True
+    opt.invMod = True
     showPrototype()
 
   dataVar = makeVar(opt.pName, mont.bit, mont.p, const=False, static=False)
@@ -675,6 +938,10 @@ def main():
     gen_modp2(f'{opt.pre}modp2', mont, mulUnit, opt.modp2_bit // unit, paramVar)
   if opt.modp3:
     gen_modp3(f'{opt.pre}modp3', mont, mulUnit, opt.modp2_bit // unit)
+  if opt.invMod:
+    # W = N + 1 (InvModT::wide) unless -2p < d, e < p fits in signed N units
+    invW = mont.pn if nocarry else mont.pn + 1
+    gen_invMod_all(opt.pre, mont.pn, invW, mulUnit, mulPos, extractHigh, opt.inv_helpers)
 
   term()
 
