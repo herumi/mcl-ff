@@ -98,6 +98,12 @@ extern "C" {
 	// Fp2 sqr (2 fused Montgomery mul); weak because it is generated only
 	// when p < R/4 (the nocarry condition), e.g. not for BLS12-381-r
 	__attribute__((weak)) void llvm2_sqr(uint64_t*, const uint64_t*);
+	// llvm2_mul with the reduction replaced by llvm_mod128; weak like
+	// llvm_mod128 (even N, non-full-bit p only)
+	__attribute__((weak)) void llvm2_mul128(uint64_t*, const uint64_t*, const uint64_t*);
+	// llvm2_sqr with the fused mul replaced by llvm_mul128; weak like
+	// llvm2_sqr and llvm_mul128
+	__attribute__((weak)) void llvm2_sqr128(uint64_t*, const uint64_t*);
 	// z[2N] = x[N] * y[N] (no reduction)
 	void llvm_mulPre(uint64_t*, const uint64_t*, const uint64_t*);
 	// z[N] = xy[2N] R^-1 mod p (Montgomery reduction)
@@ -387,10 +393,12 @@ int main(int argc, char *argv[]) {
 		check_and_bench(mode, "sqr", C2, Fp::sqr, std::initializer_list<FpOp1>{llvm_sqr, x64_sqr});
 	}
 	if (ss.empty() || ss.find("mul2") != ss.end()) {
-		check_and_bench(mode, "mul2", C2, Fp2::mul, {llvm2_mul, x642_mul});
+		// llvm2_mul128 lands in the 5th (llvm128) column
+		check_and_bench(mode, "mul2", C2, Fp2::mul, {llvm2_mul, x642_mul, (FpOp)nullptr, llvm2_mul128});
 	}
 	if (ss.empty() || ss.find("sqr2") != ss.end()) {
-		check_and_bench(mode, "sqr2", C2, Fp2::sqr, std::initializer_list<FpOp1>{llvm2_sqr, x642_sqr});
+		// llvm2_sqr128 lands in the 5th (llvm128) column
+		check_and_bench(mode, "sqr2", C2, Fp2::sqr, std::initializer_list<FpOp1>{llvm2_sqr, x642_sqr, (FpOp1)nullptr, llvm2_sqr128});
 	}
 	if (ss.empty() || ss.find("mulPre") != ss.end()) {
 		check_and_bench(mode, "mulPre", C2, FpDbl::mulPre, std::initializer_list<FpOp>{llvm_mulPre, x64_mulPre, x64_mulPre_wo_adx});
