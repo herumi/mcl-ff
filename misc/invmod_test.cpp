@@ -254,8 +254,8 @@ bool initInvMod()
 {
 	const fp::Op& op = Fp::getOp();
 	switch (op.N) {
-	case 4: return twos::initParam(g_im4, op.mp) && mcl::inv::init(g_mim4, op.mp);
-	case 6: return twos::initParam(g_im6, op.mp) && mcl::inv::init(g_mim6, op.mp);
+	case 4: if (!twos::initParam(g_im4, op.mp)) return false; mcl::inv::init<4>(g_mim4, op.p); return true;
+	case 6: if (!twos::initParam(g_im6, op.mp)) return false; mcl::inv::init<6>(g_mim6, op.p); return true;
 	default: return false;
 	}
 }
